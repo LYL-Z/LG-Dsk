@@ -1,0 +1,10 @@
+{
+  "product": "GlassDesk",
+  "version": "1.2.2",
+  "originalTag": "v1.2.2",
+  "originalCommit": "6be0a2d3319a872d4a50f8669c6c3398063b4e18",
+  "originalRepository": "https://github.com/everlosttime/glassdesk",
+  "exportMethod": "Complete src/tests plus required build configuration, tools and third-party notices; excludes private history and machine data",
+  "license": "Apache-2.0",
+  "licenseAddedAtPublicExport": true
+}
