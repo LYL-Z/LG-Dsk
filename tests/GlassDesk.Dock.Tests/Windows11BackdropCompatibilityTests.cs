@@ -10,6 +10,36 @@ namespace GlassDesk.Dock.Tests;
 
 public sealed class Windows11BackdropCompatibilityTests(ITestOutputHelper output)
 {
+    [Fact]
+    public void SharedCarrierIsExcludedFromTaskSwitchingWhileLiveCaptureKeepsUpdating()
+    {
+        if (GlassDesk.Platform.WindowsCapabilities.BuildNumber != 26100) return;
+        using var fixture = new Fixture();
+        StaTest.Run(() =>
+        {
+            SetThreadDpiAwarenessContext(-4);
+            using var capture = CreateCarrierCapture();
+            var handle = capture.CarrierHandle;
+            // NOACTIVATE excludes an auxiliary popup from Alt+Tab by default.
+            // TOOLWINDOW would make this surface ineligible for WGC capture.
+            var style = GetWindowLongPtrW(handle, -20).ToInt64();
+            Assert.True((style & 0x08000000L) != 0,
+                $"Capture carrier participates in activation/task switching: ExStyle=0x{style:X}.");
+            Assert.Equal(0L, style & (0x00040000L | 0x00000080L));
+            Assert.NotEqual(nint.Zero, GetWindow(handle, 4));
+            Assert.True(IsWindowVisible(handle));
+            Read(typeof(SharedDesktopSceneCapture), capture, frame => Is(frame, 20, 20, 0, 255, 0));
+            fixture.Send("red");
+            Read(typeof(SharedDesktopSceneCapture), capture, frame => Is(frame, 20, 20, 0, 0, 255));
+        });
+    }
+
+    private SharedDesktopSceneCapture CreateCarrierCapture()
+    {
+        try { return new SharedDesktopSceneCapture(new(300, 200, 240, 160)); }
+        catch (Exception error) { output.WriteLine(error.ToString()); throw; }
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -105,17 +135,23 @@ public sealed class Windows11BackdropCompatibilityTests(ITestOutputHelper output
             SetThreadDpiAwarenessContext(-4);
             var bounds = GlassDesk.Platform.Displays.DisplayService.Primary()!.Bounds;
             var region = new ScreenRect(bounds.X + bounds.Width / 2 - 80, bounds.Bottom - 200, 160, 48);
-            var reference = SharedDesktopSceneCapture.Capture(region, TimeSpan.FromSeconds(3));
-            Assert.NotNull(reference);
+            // Keep a contemporaneous reference. A snapshot taken before the helper's
+            // cold startup can belong to a different desktop/animation state.
+            using var referenceSource = new SharedDesktopSceneCapture(region);
             var worker = typeof(SharedBackdropFeed).Assembly.GetType("IsolatedDesktopSceneCapture");
             Assert.NotNull(worker);
             var executable = CompatibilityProbePath.File("GlassCaptureProbe.exe");
             using var capture = (IDisposable)Activator.CreateInstance(worker, BindingFlags.Instance | BindingFlags.NonPublic,
                 null, [region, null, executable], null)!;
             var frame = Read(worker, capture, pixels =>
-                Math.Abs(pixels.Center[0] - reference.Center[0]) <= 8
-                && Math.Abs(pixels.Center[1] - reference.Center[1]) <= 8
-                && Math.Abs(pixels.Center[2] - reference.Center[2]) <= 8);
+            {
+                var reference = referenceSource.TryRead(TimeSpan.FromMilliseconds(16));
+                return reference is not null
+                    && Math.Abs(pixels.SourceQpcTicks - reference.SourceQpcTicks) <= Stopwatch.Frequency / 10
+                    && Math.Abs(pixels.Center[0] - reference.Center[0]) <= 8
+                    && Math.Abs(pixels.Center[1] - reference.Center[1]) <= 8
+                    && Math.Abs(pixels.Center[2] - reference.Center[2]) <= 8;
+            });
             output.WriteLine("Isolated live desktop plane BGRA: " + string.Join(",", frame.Center));
         });
     }
@@ -162,6 +198,26 @@ public sealed class Windows11BackdropCompatibilityTests(ITestOutputHelper output
                 Read(providerType, capture, frame => Is(frame, 20, 20, 0, 0, 255));
             }
             finally { own.Close(); }
+        });
+    }
+
+    [Fact]
+    public void RevealSnapshotUsesTheDesktopAfterAForeignWindowMoves()
+    {
+        using var fixture = new Fixture();
+        StaTest.Run(() =>
+        {
+            SetThreadDpiAwarenessContext(-4);
+            using var sampler = new GlassDesk.Platform.DesktopRegionSampler();
+            for (var index = 0; index < 20; index++)
+            {
+                Assert.True(SetWindowPos(fixture.TopHandle, -1, 360, 240, 120, 80, 0x10));
+                Thread.Sleep(40);
+                Assert.True(SetWindowPos(fixture.TopHandle, -1, 480, 280, 120, 80, 0x10));
+                Assert.True(sampler.TryCaptureBeforeReveal(new(400, 280, 16, 16), 16, 16, out var pixels));
+                Assert.True(pixels![0] <= 3 && pixels[1] >= 252 && pixels[2] <= 3,
+                    $"Snapshot retained the moved blue window: {pixels[0]},{pixels[1]},{pixels[2]} at reveal {index}.");
+            }
         });
     }
 
@@ -245,6 +301,9 @@ public sealed class Windows11BackdropCompatibilityTests(ITestOutputHelper output
     }
 
     [DllImport("user32.dll")] private static extern bool GetWindowDisplayAffinity(nint hwnd, out uint affinity);
+    [DllImport("user32.dll")] private static extern nint GetWindowLongPtrW(nint hwnd, int index);
+    [DllImport("user32.dll")] private static extern nint GetWindow(nint hwnd, uint command);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(nint hwnd);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint hwnd, out uint processId);
     [DllImport("user32.dll")] private static extern nint SetThreadDpiAwarenessContext(nint context);
     [DllImport("user32.dll")] private static extern bool SetWindowPos(nint hwnd, nint after, int x, int y, int width, int height, uint flags);

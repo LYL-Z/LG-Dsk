@@ -28,11 +28,11 @@ internal sealed class InteractionController : IDisposable
         _data = data ?? throw new ArgumentNullException(nameof(data));
         _ = primaryDisplay ?? throw new ArgumentNullException(nameof(primaryDisplay));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
-        _ = canExecute ?? throw new ArgumentNullException(nameof(canExecute));
+        ArgumentNullException.ThrowIfNull(canExecute);
         _execute = execute ?? throw new ArgumentNullException(nameof(execute));
         _reportError = reportError ?? throw new ArgumentNullException(nameof(reportError));
         _settings = new InteractionSettingsService(data.Settings, new NativeHotkeyRegistry(hwnd,
-            id => CanExecute(_settings!.ResolveAction(id))));
+            id => CanExecute(_settings!.ResolveAction(id)) && canExecute(_settings.ResolveAction(id))));
     }
 
     public string? Initialize()

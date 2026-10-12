@@ -93,11 +93,17 @@ public class DockMagnificationTests
 
         Assert.Equal(Peak, geometry[2].Scale, 9);
 
-        // 其余磁贴缩放严格小于峰值且随距离单调回落。
-        Assert.True(geometry[0].Scale < geometry[1].Scale);
+        // 当前有限范围曲线在一个槽位节距外归1，外围可相等。
+        Assert.Equal(1, geometry[0].Scale);
+        Assert.True(geometry[0].Scale <= geometry[1].Scale);
         Assert.True(geometry[1].Scale < geometry[2].Scale);
         Assert.True(geometry[3].Scale < geometry[2].Scale);
-        Assert.True(geometry[4].Scale < geometry[3].Scale);
+        Assert.True(geometry[4].Scale <= geometry[3].Scale);
+        var midpoint = (GlassDock.SlotCenter(1, Size, Spacing, Peak) + GlassDock.SlotCenter(2, Size, Spacing, Peak)) / 2;
+        var between = GlassDock.Compute(5, Size, Spacing, Peak, midpoint);
+        Assert.Equal(between[1].Scale, between[2].Scale, 9);
+        Assert.InRange(between[1].Scale, 1.01, Peak - .01);
+        Assert.Equal(1, between[0].Scale);
     }
 
     [Fact]

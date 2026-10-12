@@ -48,6 +48,7 @@ public sealed class FullscreenWatcher : IDisposable
     private readonly Action? _onStateInvalidated;
     private readonly Func<long>? _getStateGeneration;
     private readonly Action<long, bool>? _onStateRefreshed;
+    private readonly Action<PerformanceFullscreenObservation>? _onPerformanceObservation;
     private readonly ManualResetEventSlim _ready = new(false);
     private readonly Thread _hookThread;
     private readonly List<nint> _hooks = [];
@@ -64,13 +65,14 @@ public sealed class FullscreenWatcher : IDisposable
 
     private FullscreenWatcher(Action<bool>? onChanged, FullscreenOptions options,
         Action? onStateInvalidated, Func<long>? getStateGeneration,
-        Action<long, bool>? onStateRefreshed)
+        Action<long, bool>? onStateRefreshed, Action<PerformanceFullscreenObservation>? onPerformanceObservation)
     {
         _onChanged = onChanged;
         _options = options;
         _onStateInvalidated = onStateInvalidated;
         _getStateGeneration = getStateGeneration;
         _onStateRefreshed = onStateRefreshed;
+        _onPerformanceObservation = onPerformanceObservation;
         _callback = OnWinEvent;
         _hookThread = new Thread(HookThreadMain)
         {
@@ -106,10 +108,11 @@ public sealed class FullscreenWatcher : IDisposable
     /// </param>
     public static FullscreenWatcher? TryStart(Action<bool>? onFullscreenChanged = null,
         FullscreenOptions? options = null, Action? onStateInvalidated = null,
-        Func<long>? getStateGeneration = null, Action<long, bool>? onStateRefreshed = null)
+        Func<long>? getStateGeneration = null, Action<long, bool>? onStateRefreshed = null,
+        Action<PerformanceFullscreenObservation>? onPerformanceObservation = null)
     {
         var watcher = new FullscreenWatcher(onFullscreenChanged, options ?? FullscreenOptions.Default,
-            onStateInvalidated, getStateGeneration, onStateRefreshed);
+            onStateInvalidated, getStateGeneration, onStateRefreshed, onPerformanceObservation);
 
         if (watcher.Start())
         {
@@ -351,7 +354,9 @@ public sealed class FullscreenWatcher : IDisposable
     private bool Recompute()
     {
         var generation = _getStateGeneration?.Invoke() ?? 0;
-        var current = FullscreenDetector.IsFullscreenActive(_options);
+        var observation = _onPerformanceObservation is not null ? FullscreenDetector.ReadPerformanceObservation() : default;
+        var current = _onPerformanceObservation is not null ? observation.IsFullscreen ?? IsFullscreen
+            : FullscreenDetector.IsFullscreenActive(_options);
         if (_getStateGeneration is not null && _getStateGeneration() != generation) return current;
 
         Action<bool>? callback = null;
@@ -371,6 +376,8 @@ public sealed class FullscreenWatcher : IDisposable
         catch (Exception) { /* 输入侧仍停留在 Unknown，保持安全关闭。 */ }
         try { callback?.Invoke(current); }
         catch (Exception) { /* 变化通知不应终止监视线程。 */ }
+        try { _onPerformanceObservation?.Invoke(observation); }
+        catch (Exception) { /* Performance notifications never escape the native callback path. */ }
 
         return current;
     }

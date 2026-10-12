@@ -93,7 +93,8 @@ public sealed class SingleInstanceProcessTests : IDisposable
 
         var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name;
         Assert.False(string.IsNullOrWhiteSpace(configuration));
-        return Path.Combine(repository!.FullName, "tests", "GlassDesk.InstanceProbe", "bin", configuration!, "net10.0-windows", "GlassDesk.InstanceProbe.exe");
+        var framework = new DirectoryInfo(AppContext.BaseDirectory).Name;
+        return Path.Combine(repository!.FullName, "tests", "GlassDesk.InstanceProbe", "bin", configuration!, framework, "GlassDesk.InstanceProbe.exe");
     }
 
     public void Dispose() => Directory.Delete(_root, recursive: true);

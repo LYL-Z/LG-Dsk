@@ -16,6 +16,16 @@ public sealed class DockSettings
     public const double FixedMagnificationPeak = 1.15;
     public const double MinimumFrameLengthDip = 180;
     public const double MaximumFrameLengthDip = 10000;
+    public const double MinimumSizeScale = 2d / 3;
+    public const double MaximumSizeScale = 1.5;
+
+    /// <summary>整体尺寸倍率，同时调整图标、间距与栏厚度。旧配置默认保持原尺寸。</summary>
+    public double SizeScale { get; set; } = 1;
+
+    /// <summary>内置入口固定在应用左侧；旧配置默认显示全部入口。</summary>
+    public bool ShowLauncherEntry { get; set; } = true;
+    public bool ShowThisPcEntry { get; set; } = true;
+    public bool ShowDesktopIconsEntry { get; set; } = true;
 
     /// <summary>
     /// Dock 玻璃外框的横向长度，单位为 DIP。零表示继续按内容自动调整，

@@ -63,13 +63,14 @@ public partial class SettingsWindow : GlassWindow
         }
 
         _sectionHeadings = [AppearanceSectionHeading, DockSectionHeading, LauncherSectionHeading,
-            ShortcutsSectionHeading, DesktopSectionHeading, BackupSectionHeading, AboutSectionHeading];
+            ShortcutsSectionHeading, PerformanceSectionHeading, DesktopSectionHeading, BackupSectionHeading, AboutSectionHeading];
         PlannedPages =
         [
             "外观",
             "Dock",
             "启动台",
             "快捷操作",
+            "性能",
             "桌面",
             "备份恢复",
             "关于",
@@ -80,7 +81,7 @@ public partial class SettingsWindow : GlassWindow
     private void OnSettingsWindowLoaded(object sender, RoutedEventArgs e) => SyncCategoryFromScroll();
 
     private bool CanResetSelectedPage => SettingsPageList.SelectedItem is string page
-        && page is "外观" or "Dock" or "启动台" or "快捷操作" or "桌面";
+        && page is "外观" or "Dock" or "启动台" or "快捷操作" or "性能" or "桌面";
 
     private void UpdateResetPageButton() => ResetPageButton.IsEnabled = SettingsPageList.IsEnabled
         && _dataStore is not null && CanResetSelectedPage;
@@ -108,6 +109,7 @@ public partial class SettingsWindow : GlassWindow
         LoadLauncherControls();
         LoadAppearanceControls();
         LoadInteractionControls();
+        LoadPerformanceControls();
         LoadDesktopStatus();
         RefreshDiagnostics(loadReport);
     }
@@ -185,6 +187,11 @@ public partial class SettingsWindow : GlassWindow
         {
             var current = _dataStore.Settings.Current;
             var dock = current.Dock;
+            ShowLauncherEntryCheckBox.IsChecked = dock.ShowLauncherEntry;
+            ShowThisPcEntryCheckBox.IsChecked = dock.ShowThisPcEntry;
+            ShowDesktopIconsEntryCheckBox.IsChecked = dock.ShowDesktopIconsEntry;
+            DockScaleSlider.Value = dock.SizeScale;
+            DockScaleReadout.Text = $"{dock.SizeScale:P0} · 图标 {48 * dock.SizeScale:0} DIP";
             DockPlacementCombo.SelectedIndex = (int)dock.Placement;
             var display = PrimaryDisplaySession is { IsAvailable: true } session
                 ? session.Display
@@ -193,7 +200,10 @@ public partial class SettingsWindow : GlassWindow
                 ? DockSettings.MaximumFrameLengthDip
                 : display.ToDips((int)display.WorkArea.Width) - 32;
             var maximum = Math.Min(DockSettings.MaximumFrameLengthDip, Math.Max(64, availableWidthDip));
-            var minimum = Math.Min(DockSettings.MinimumFrameLengthDip, maximum);
+            var entryCount = (dock.ShowLauncherEntry ? 1 : 0) + (dock.ShowThisPcEntry ? 1 : 0)
+                + (dock.ShowDesktopIconsEntry ? 1 : 0);
+            var minimum = Math.Min(Math.Max(DockSettings.MinimumFrameLengthDip,
+                22 + (DockSettings.FixedIconSize + DockSettings.FixedIconSpacing) * entryCount) * dock.SizeScale, maximum);
             DockFrameLengthSlider.Minimum = minimum;
             DockFrameLengthSlider.Maximum = maximum;
             var frameLengthValid = dock.FrameLengthDip == 0
@@ -211,7 +221,7 @@ public partial class SettingsWindow : GlassWindow
             DockOffsetYSlider.Value = Coerce(dock.OffsetY, -200, 200);
             DockSettingsStatus.Text = _dockValuesOutOfRange
                 ? "配置文件中有超出支持范围的数值，已显示为最近的可用值；请先恢复当前页默认，避免覆盖原数据。"
-                : "外框长度只改变横向边框；图标大小、间距和栏厚度保持不变。";
+                : "整体大小调整图标与栏高度；外框长度可独立调整。修改后立即保存并应用。";
         }
         finally { _loadingDockControls = false; }
     }
@@ -339,6 +349,10 @@ public partial class SettingsWindow : GlassWindow
         var previousCorner = current.Appearance.DockCornerRadius;
         var next = new DockSettings
         {
+            SizeScale = DockScaleSlider.Value,
+            ShowLauncherEntry = ShowLauncherEntryCheckBox.IsChecked == true,
+            ShowThisPcEntry = ShowThisPcEntryCheckBox.IsChecked == true,
+            ShowDesktopIconsEntry = ShowDesktopIconsEntryCheckBox.IsChecked == true,
             IconSize = DockSettings.FixedIconSize,
             IconSpacing = DockSettings.FixedIconSpacing,
             MagnificationPeak = DockSettings.FixedMagnificationPeak,
@@ -379,9 +393,8 @@ public partial class SettingsWindow : GlassWindow
             DockFrameLengthReadout.Text = next.FrameLengthDip > 0
                 ? $"固定外框：{DockFrameLengthSlider.Value:0} DIP"
                 : "当前随图标内容自动调整；拖动滑块后固定外框长度。";
-            DockSettingsStatus.Text = next.FrameLengthDip > 0
-                ? $"已保存；Dock 外框 {next.FrameLengthDip:0} DIP，图标尺寸保持固定。"
-                : "已保存；Dock 外框随图标内容自动调整，图标尺寸保持固定。";
+            LoadDockControls();
+            DockSettingsStatus.Text = $"已保存；整体大小 {next.SizeScale:P0}，图标 {48 * next.SizeScale:0} DIP。";
         }
         catch (Exception ex)
         {
@@ -390,6 +403,14 @@ public partial class SettingsWindow : GlassWindow
             LoadDockControls();
             DockSettingsStatus.Text = "保存失败，已恢复原设置：" + ex.Message;
         }
+    }
+
+    private void OnDockAutoLengthClick(object sender, RoutedEventArgs e)
+    {
+        if (_dataStore is null || _dockValuesOutOfRange) return;
+        var snapshot = SettingsPageEditor.Clone(_dataStore.Settings.Current);
+        _dataStore.Settings.Current.Dock.FrameLengthDip = 0;
+        SavePageSnapshot(snapshot, "Dock", DockSettingsStatus);
     }
 
     /// <summary>重建环境报告。</summary>

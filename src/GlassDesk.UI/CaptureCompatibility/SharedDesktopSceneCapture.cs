@@ -99,8 +99,8 @@ internal sealed unsafe class SharedDesktopSceneCapture : IDesktopSceneCapture
             var desktopId=new Guid("5F4633FE-1E08-4CB8-8C75-CE24333F5602");
             Check(DCompositionCreateDevice3(dxgi,in desktopId,out composition));
             // WGC rejects TOOLWINDOW capture items. A never-shown popup owner
-            // excludes this auxiliary popup from the taskbar before its first show,
-            // while leaving the offscreen capture surface eligible for WGC.
+            // excludes this auxiliary popup from the taskbar before its first show.
+            // After creating the WGC item, NOACTIVATE excludes it from Alt+Tab.
             carrierOwner=CreateWindowExW(0,"STATIC","GlassDesk capture owner",0x80000000,0,0,1,1,0,0,0,0);
             if(carrierOwner==0) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
             carrier=CreateWindowExW(0x00200008,"STATIC","GlassDesk controlled shared desktop carrier",0x80000000,
@@ -128,6 +128,13 @@ internal sealed unsafe class SharedDesktopSceneCapture : IDesktopSceneCapture
             ShowWindow(carrier,4);
             Check(DwmFlush());
             _capture=new PersistentWindowCapture(carrier,trace,device,context);
+            // CreateForWindow requires a visible, activation-eligible window. Once
+            // the persistent session owns its item, exclude the carrier from shell
+            // activation/task switching without rebuilding that capture item.
+            ShowWindow(carrier,0);
+            if(SetWindowLongPtrW(carrier,-20,new nint(0x08200008))==0)
+                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            ShowWindow(carrier,4);
         }
         catch {Dispose();throw;}
     }
@@ -272,6 +279,7 @@ internal sealed unsafe class SharedDesktopSceneCapture : IDesktopSceneCapture
     [DllImport("dcomp.dll")] private static extern int DCompositionCreateDevice3(nint device,in Guid iid,out nint composition);
     [DllImport("user32.dll",SetLastError=true)] private static extern nint CreateWindowExW(uint extendedStyle,[MarshalAs(UnmanagedType.LPWStr)] string className,[MarshalAs(UnmanagedType.LPWStr)] string name,uint style,int x,int y,int width,int height,nint parent,nint menu,nint instance,nint param);
     [DllImport("user32.dll")] private static extern bool DestroyWindow(nint hwnd);
+    [DllImport("user32.dll",SetLastError=true)] private static extern nint SetWindowLongPtrW(nint hwnd,int index,nint value);
     [DllImport("user32.dll")] private static extern nint GetShellWindow();
     [DllImport("user32.dll")] private static extern bool SetWindowCompositionAttribute(nint hwnd,ref CompositionAttribute data);
     [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);

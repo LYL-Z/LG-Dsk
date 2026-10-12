@@ -77,6 +77,26 @@
             </Canvas>
           </Viewbox>
         </Button>
+        <Button x:Name="DesktopIconsButton" Width="48" Height="64" Margin="0,0,8,0" Padding="0"
+                Style="{StaticResource DockEntryButton}"
+                ToolTip="切换桌面图标显示" AutomationProperties.Name="切换桌面图标显示"
+                MouseEnter="OnEntryMouseEnter" MouseLeave="OnEntryMouseLeave"
+                Click="OnDesktopIconsButtonClick">
+          <Viewbox x:Name="DesktopIconsTile" Width="48" Height="48" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Canvas Width="48" Height="48">
+              <Path Data="M6,6 H42 Q45,6 45,9 V29 Q45,32 42,32 H6 Q3,32 3,29 V9 Q3,6 6,6 Z M24,32 V39 M15,40 H33"
+                    Fill="Transparent"
+                    Stroke="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}"
+                    StrokeThickness="3.5" StrokeLineJoin="Round"
+                    StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+              <Path Data="M11,12 H15 V16 H11 Z M11,22 H15 V26 H11 Z M23,15 H37 M32,10 L37,15 L32,20 M37,24 H23 M28,19 L23,24 L28,29"
+                    Fill="Transparent"
+                    Stroke="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}"
+                    StrokeThickness="3.5" StrokeLineJoin="Round"
+                    StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+            </Canvas>
+          </Viewbox>
+        </Button>
         <ContentControl x:Name="TileStripHost"
                         AutomationProperties.Name="固定的应用"
                         Focusable="False" />

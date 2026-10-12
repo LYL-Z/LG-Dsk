@@ -12,6 +12,7 @@ internal sealed class IsolatedDesktopSceneCapture : IDesktopSceneCapture
     private readonly ScreenRect _region;
     private readonly GlassBackdropSource _source;
     public bool AllowsStaticContent => true;
+    public bool SupportsSampling => true;
     public long SceneRevision { get; private set; }
     private SharedCapturePixels? _sharedPixels;
     private byte[]? _pixels;
@@ -46,16 +47,18 @@ internal sealed class IsolatedDesktopSceneCapture : IDesktopSceneCapture
         _input = _process.StandardInput.BaseStream; _output = _process.StandardOutput.BaseStream;
         try
         {
-            _sharedPixels = SharedCapturePixels.Create(checked(region.Width * region.Height * 4));
+            _sharedPixels = SharedCapturePixels.Create(4_000_000);
             using var deadline = Deadline();
             Send(writer =>
             {
                 writer.Write(BackdropCaptureWorker.ProtocolMagic); writer.Write(BackdropCaptureWorker.ProtocolVersion);
                 writer.Write(source == GlassBackdropSource.LiveDesktop ? (byte)0 : source == GlassBackdropSource.CompatibleScene ? (byte)1 : (byte)2);
                 writer.Write(region.X); writer.Write(region.Y);
-                writer.Write(region.Width); writer.Write(region.Height); writer.Write(_sharedPixels.Name); WriteFamily(writer);
+                writer.Write(region.Width); writer.Write(region.Height); writer.Write(_sharedPixels.Name); writer.Write(_sharedPixels.Capacity); WriteFamily(writer);
             }, deadline.Token);
             if (Status(deadline.Token) != 1) throw new InvalidDataException("Capture worker did not initialize.");
+            if(BitConverter.ToInt32(Read(4,deadline.Token))!=BackdropCaptureWorker.ProtocolVersion)
+                throw new InvalidDataException("Capture worker protocol version does not match the application.");
             CarrierHandle = (nint)BitConverter.ToInt64(Read(8, deadline.Token));
             trace?.Invoke(new("BackdropProvider", source.ToString(), Stopwatch.GetTimestamp()));
         }
@@ -73,25 +76,65 @@ internal sealed class IsolatedDesktopSceneCapture : IDesktopSceneCapture
     internal CapturePixels? TryRead(TimeSpan waitForFrame = default, CancellationToken cancellation = default,
         long sourceNotBeforeTicks = 0, bool reusePixels = false)
     {
+        var bytes=checked(_region.Width*_region.Height*4);
+        var pixels=reusePixels ? _pixels ??= new byte[bytes] : new byte[bytes];
+        if(bytes<=4_000_000)
+            return TryReadSampled(new(0,0,_region.Width,_region.Height),_region.Width,_region.Height,pixels,
+                waitForFrame,cancellation,sourceNotBeforeTicks);
+        // Diagnostic native snapshots are tiled across the bounded mapping. Production
+        // feeds always use TryReadSampled and never allocate this physical-size array.
+        var rows=Math.Max(1,1_000_000/_region.Width);
+        var tile=new byte[checked(_region.Width*Math.Min(rows,_region.Height)*4)];
+        long ticks=0;
+        for(var y=0;y<_region.Height;y+=rows)
+        {
+            var count=Math.Min(rows,_region.Height-y);
+            if(tile.Length!=_region.Width*count*4) tile=new byte[_region.Width*count*4];
+            var frame=ReadSampled(new(0,y,_region.Width,y+count),_region.Width,count,tile,
+                waitForFrame,cancellation,sourceNotBeforeTicks,cachedSourceTicks:ticks);
+            if(frame is null) return null;
+            Buffer.BlockCopy(tile,0,pixels,checked(y*_region.Width*4),tile.Length);ticks=frame.SourceQpcTicks;
+        }
+        return new(_region.Width,_region.Height,pixels) {SourceQpcTicks=ticks,IsStatic=true,Source=_source};
+    }
+    internal CapturePixels? TryReadSampled(PixelBounds crop,int width,int height,byte[] target,
+        TimeSpan waitForFrame=default,CancellationToken cancellation=default,long sourceNotBeforeTicks=0)
+        => ReadSampled(crop,width,height,target,waitForFrame,cancellation,sourceNotBeforeTicks);
+    private CapturePixels? ReadSampled(PixelBounds crop,int width,int height,byte[] target,
+        TimeSpan waitForFrame,CancellationToken cancellation,long sourceNotBeforeTicks,long cachedSourceTicks=0)
+    {
+        if(crop.Left<0 || crop.Top<0 || crop.Right>_region.Width || crop.Bottom>_region.Height || crop.Width<=0 || crop.Height<=0
+            || width<=0 || height<=0 || (long)width*height>1_000_000 || target.Length!=(long)width*height*4)
+            throw new ArgumentException("Invalid sampled capture geometry.");
         cancellation.ThrowIfCancellationRequested();
         if (sourceNotBeforeTicks > _lastBarrier) { _lastBarrier = sourceNotBeforeTicks; ++_generation; }
         using var deadline = Deadline(cancellation); var sequence = ++_sequence;
-        Command(1, sequence, deadline.Token, writer =>
-        { writer.Write(sourceNotBeforeTicks); writer.Write((int)Math.Clamp(waitForFrame.TotalMilliseconds, 0, 100)); }, cancellation);
+        Command(cachedSourceTicks==0 ? (byte)1 : (byte)4, sequence, deadline.Token, writer =>
+        {
+            writer.Write(sourceNotBeforeTicks); writer.Write((int)Math.Clamp(waitForFrame.TotalMilliseconds, 0, 100));
+            writer.Write(crop.Left);writer.Write(crop.Top);writer.Write(crop.Right);writer.Write(crop.Bottom);
+            writer.Write(width);writer.Write(height);
+            if(cachedSourceTicks!=0) writer.Write(cachedSourceTicks);
+        }, cancellation);
         var status = Status(deadline.Token, cancellation); ValidateReply(sequence, deadline.Token, cancellation);
         if (status == 0) return null;
-        var header = Read(20, deadline.Token, cancellation);
-        var width = BitConverter.ToInt32(header, 0); var height = BitConverter.ToInt32(header, 4);
+        var header = Read(36, deadline.Token, cancellation);
+        var actualWidth = BitConverter.ToInt32(header, 0); var actualHeight = BitConverter.ToInt32(header, 4);
         var ticks = BitConverter.ToInt64(header, 8); var bytes = BitConverter.ToInt32(header, 16);
-        if (width != _region.Width || height != _region.Height || bytes != (long)width * height * 4
+        var actualCrop=new PixelBounds(BitConverter.ToInt32(header,20),BitConverter.ToInt32(header,24),
+            BitConverter.ToInt32(header,28),BitConverter.ToInt32(header,32));
+        if (actualWidth != width || actualHeight != height || actualCrop!=crop || bytes != target.Length
+            || (cachedSourceTicks!=0 && ticks!=cachedSourceTicks)
             || ticks <= 0 || ticks < sourceNotBeforeTicks || ticks > Stopwatch.GetTimestamp() + Stopwatch.Frequency / 30)
             throw new InvalidDataException("Capture worker returned invalid geometry or source time.");
-        var pixels = reusePixels ? _pixels ??= new byte[bytes] : new byte[bytes]; _sharedPixels!.Read(pixels);
-        return new(width, height, pixels) { SourceQpcTicks = ticks, IsStatic = true,
+        _sharedPixels!.Read(target);
+        return new(width, height, target) { SourceQpcTicks = ticks, IsStatic = true,
             Source = _source };
     }
     CapturePixels? IDesktopSceneCapture.TryRead(TimeSpan wait, CancellationToken cancellation, long notBefore, bool reuse)
         => TryRead(wait, cancellation, notBefore, reuse);
+    CapturePixels? IDesktopSceneCapture.TryReadSampled(PixelBounds crop,int width,int height,byte[] target,TimeSpan wait,
+        CancellationToken cancellation,long notBefore) => TryReadSampled(crop,width,height,target,wait,cancellation,notBefore);
     internal void ReleaseReadbackBuffers()
     {
         using var deadline = Deadline(); var sequence = ++_sequence;

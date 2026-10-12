@@ -9,47 +9,51 @@ namespace GlassDesk.Dock.Tests;
 public sealed class LiveCaptureAllocationTests(ITestOutputHelper output)
 {
     [Fact]
-    public void UnchangedLiveFramesReuseTheStableSnapshotWithoutLargeAllocations()
+    public void UnchangedLiveFramesLeaseTheSamePixelsWithoutLargeAllocations()
     {
         using var fixture = new CaptureFixture();
         var pixels = new byte[640 * 500 * 4];
         new Random(1234).NextBytes(pixels);
         fixture.Publish(pixels, 1);
-        var first = fixture.Read();
+        using var first = fixture.Read();
         var allocated = GC.GetAllocatedBytesForCurrentThread();
         for (var i = 0; i < 12; i++)
-            Assert.Same(first, fixture.Read());
+        {
+            using var read = fixture.Read();
+            Assert.Same(first.Pixels, read.Pixels);
+            Assert.Equal(first.Sequence, read.Sequence);
+        }
         allocated = GC.GetAllocatedBytesForCurrentThread() - allocated;
         output.WriteLine($"Repeated live snapshot: {allocated / 12} bytes/read");
         Assert.True(allocated < 16_384, $"Unchanged snapshots allocated {allocated} bytes.");
 
         // New source timestamps with identical pixels are also safe to reuse.
         fixture.Publish((byte[])pixels.Clone(), 2);
-        Assert.Same(first, fixture.Read());
+        using var later = fixture.Read();
+        Assert.Equal(first.Pixels, later.Pixels);
+        Assert.Equal(first.Sequence, later.Sequence);
     }
 
     [Fact]
-    public void ChangedLiveFramesCopyPixelsOnceAndKeepPreviouslyPresentedPixelsStable()
+    public void ChangedLiveFramesTransferOwnedPixelsWithoutCopyingAndKeepReadersStable()
     {
         using var fixture = new CaptureFixture();
         var original = new byte[640 * 500 * 4];
         original[0] = 10;
         fixture.Publish(original, 1);
-        var first = fixture.Read();
+        using var first = fixture.Read();
         var changed = (byte[])original.Clone();
         changed[0] = 90;
         fixture.Publish(changed, 2);
         var allocated = GC.GetAllocatedBytesForCurrentThread();
-        var second = fixture.Read();
+        using var second = fixture.Read();
         allocated = GC.GetAllocatedBytesForCurrentThread() - allocated;
         output.WriteLine($"Changed live snapshot: {allocated} bytes/read");
         Assert.True(allocated < changed.Length * 1.1, $"A {changed.Length}-byte capture allocated {allocated} bytes.");
         Assert.NotSame(first, second);
         Assert.Equal((byte)10, first.Pixels[0]);
         Assert.Equal((byte)90, second.Pixels[0]);
-        Assert.NotSame(changed, second.Pixels);
-        changed[0] = 200;
-        Assert.Equal((byte)90, second.Pixels[0]);
+        Assert.Same(changed, second.Pixels);
     }
 
     [Fact]
@@ -57,11 +61,12 @@ public sealed class LiveCaptureAllocationTests(ITestOutputHelper output)
     {
         using var fixture = new CaptureFixture();
         fixture.Publish(new byte[640 * 500 * 4], 1);
-        var before = fixture.Read();
+        using var before = fixture.Read();
         fixture.Background.Suspend();
         Assert.Null(fixture.Background.Capture(fixture.Region, 640, 500, 20, true));
         fixture.Publish(new byte[640 * 500 * 4], 2);
-        Assert.NotSame(before, fixture.Read());
+        using var after = fixture.Read();
+        Assert.NotSame(before, after);
     }
 
     [Fact]
@@ -69,11 +74,12 @@ public sealed class LiveCaptureAllocationTests(ITestOutputHelper output)
     {
         using var fixture = new CaptureFixture();
         fixture.Publish(new byte[640 * 500 * 4], 1);
-        var before = fixture.Read();
+        using var before = fixture.Read();
         fixture.Region = fixture.Region with { X = 500 };
         Assert.Null(fixture.Background.Capture(fixture.Region, 640, 500, 20, true));
         fixture.Publish(new byte[640 * 500 * 4], 2);
-        Assert.NotSame(before, fixture.Read());
+        using var after = fixture.Read();
+        Assert.NotSame(before, after);
     }
 
     private sealed class CaptureFixture : IDisposable

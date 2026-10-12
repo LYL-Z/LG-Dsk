@@ -36,7 +36,6 @@ internal static partial class Program
             var cpuField = typeof(LiquidGlassSurface).GetField("_lastOpticsMilliseconds", fields)!;
             var bitmapField = typeof(LiquidGlassSurface).GetField("_transitionBackdrop", fields)!;
             var background = (GlassBackgroundLayer)typeof(LiquidGlassSurface).GetField("_background", fields)!.GetValue(surface)!;
-            var captureField = typeof(GlassBackgroundLayer).GetField("_lastCapture", fields)!;
             var runs = new List<object>();
             foreach (var clarity in new[] { AppearanceSettings.DefaultLauncherGlassTransparency, 1.0 })
             {
@@ -51,9 +50,9 @@ internal static partial class Program
                     var now = Stopwatch.GetTimestamp(); heartbeat.Add(Stopwatch.GetElapsedTime(previous, now).TotalMilliseconds); previous = now;
                     if (queue.Count == 0 || queue.Last() == last) return;
                     last = queue.Last(); timings.Add(last);
-                    var captured = (BackdropFrame?)captureField.GetValue(background);
+                    var captured = background.LastCaptureTiming;
                     observations.Add(new { atTicks = last, opticsMilliseconds = (double)cpuField.GetValue(surface)!,
-                        capturePixels = captured is null ? null : InspectPixels(captured.Pixels.Span),
+                        capturePixels = captured?.PixelStatistics,
                         sourceAgeMilliseconds = captured is null ? 0 : Stopwatch.GetElapsedTime(captured.SourceTicks, now).TotalMilliseconds,
                         acquisitionMilliseconds = captured is null ? 0 : Stopwatch.GetElapsedTime(captured.StartTicks, captured.EndTicks).TotalMilliseconds });
                 };

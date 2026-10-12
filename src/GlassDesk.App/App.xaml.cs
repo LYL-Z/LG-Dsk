@@ -46,14 +46,6 @@ public partial class App : Application, IDisposable
     {
         base.OnStartup(e);
 
-        if (e.Args.Length == 2 && e.Args[0] == "--glass-backdrop-worker")
-        {
-            ShutdownMode = ShutdownMode.OnExplicitShutdown;
-            GlassDesk.UI.BackdropCaptureWorker.RunIfRequested(e.Args, out var workerExit);
-            Shutdown(workerExit);
-            return;
-        }
-
         var options = CommandLineOptions.Parse(e.Args);
         if (!GlassDesk.Platform.WindowsCapabilities.IsSupported)
         {

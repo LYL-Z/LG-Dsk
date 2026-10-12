@@ -18,11 +18,17 @@ public partial class LauncherWindow
     private readonly LauncherIconLoader _iconLoader = new();
     private readonly record struct TilesRenderKey(
         long LibraryVersion, long LayoutVersion, string Query, int Page, int Rows, int Columns,
-        double PanelWidth, double PanelHeight, string? OpenGroupId);
+        double PanelWidth, double PanelHeight, string? OpenGroupId, int IconPixels);
 
     private TilesRenderKey CurrentTilesRenderKey() => new(
         _services!.Library.Version, _services.Layouts.LauncherVersion, _view.Query, _view.Page,
-        _view.Rows, _view.Columns, LauncherPanelRoot.Width, LauncherPanelRoot.Height, _view.OpenGroupId);
+        _view.Rows, _view.Columns, LauncherPanelRoot.Width, LauncherPanelRoot.Height, _view.OpenGroupId, IconPixelSize(AppIconSize));
+
+    private int IconPixelSize(double size)
+    {
+        var dpi = VisualTreeHelper.GetDpi(this);
+        return (int)Math.Ceiling(size * Math.Max(dpi.DpiScaleX, dpi.DpiScaleY) * 1.25);
+    }
 
     private double AppIconSize => Math.Clamp(Math.Floor(((LauncherPanelRoot.Height - 160) / _view.Rows - 44) / 4) * 4, 32, 64);
     private List<LauncherSlot> CurrentSlots()
@@ -153,16 +159,23 @@ public partial class LauncherWindow
         var source = entry.IconSource ?? string.Empty;
         var custom = entry.CustomIconPath;
         var version = _services!.Library.Version;
-        var key = $"{version}\0{custom}\0{source}";
-        var task = _iconLoader.LoadAsync(key, () => LoadIcon(icons, source, custom));
+        var pixels = IconPixelSize(size);
+        var generation = _iconRequestGeneration;
+        var key = $"{version}\0{custom}\0{source}\0{pixels}";
+        var task = _iconLoader.LoadAsync(key, () => LoadIcon(icons, source, custom, pixels));
         if (task.IsCompletedSuccessfully) Apply(task.Result);
         else _ = CompleteAsync();
 
         void Apply(BitmapImage? image)
         {
-            if (image is not null && _services?.Library.Version == version)
-                host.Child = new Image { Source = image, Width = size, Height = size, Stretch = Stretch.Uniform,
-                    HorizontalAlignment = HorizontalAlignment.Center };
+            if (image is null || _services?.Library.Version != version) return;
+            if (_backgroundWorkSuspended || generation != _iconRequestGeneration && !IsVisible)
+            { _iconsNeedReapply = true; return; }
+            // A retained tile can outlive an activation. A late decode may fill that
+            // same tile only while awake and at its current DPI; it cannot wake glass.
+            if (pixels != IconPixelSize(size)) return;
+            host.Child = new Image { Source = image, Width = size, Height = size, Stretch = Stretch.Uniform,
+                HorizontalAlignment = HorizontalAlignment.Center };
         }
         async Task CompleteAsync()
         {
@@ -173,7 +186,7 @@ public partial class LauncherWindow
         }
     }
 
-    private static BitmapImage? LoadIcon(GlassDesk.AppServices.IconCache icons, string iconSource, string? customIcon)
+    private static BitmapImage? LoadIcon(GlassDesk.AppServices.IconCache icons, string iconSource, string? customIcon, int pixels)
     {
         var hasCustomIcon = !string.IsNullOrWhiteSpace(customIcon) && File.Exists(customIcon);
         var path = hasCustomIcon ? customIcon : icons.PathFor(iconSource);
@@ -186,14 +199,7 @@ public partial class LauncherWindow
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;
         try
         {
-            var image = new BitmapImage();
-            image.BeginInit();
-            image.UriSource = new Uri(path, UriKind.Absolute);
-            image.CacheOption = BitmapCacheOption.OnLoad;
-            image.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
-            image.EndInit();
-            image.Freeze();
-            return image;
+            return LauncherIconDecoder.DecodeFile(path, pixels);
         }
         catch (Exception ex) when (ex is IOException or UriFormatException or FileFormatException)
         {

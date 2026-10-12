@@ -9,17 +9,21 @@ namespace GlassDesk.UI.Controls;
 public enum GlassBackdropSource { Transparent, Wallpaper, LiveDesktop, Opaque, CompatibleScene, Basic }
 
 /// <summary>A fixed BGRA snapshot for one glass frame, independent of reused capture buffers.</summary>
-internal sealed class GlassBackgroundFrame
+internal sealed class GlassBackgroundFrame : IDisposable
 {
+    private IDisposable? _lease;
     public byte[] Pixels { get; }
     public int Width { get; }
     public int Height { get; }
     public GlassBackdropSource Source { get; }
+    public long Sequence { get; internal init; }
+    public long CaptureGeneration { get; internal init; }
+    public bool IsCaptured { get; internal init; }
 
     public GlassBackgroundFrame(byte[] pixels, int width, int height, GlassBackdropSource source)
         : this(pixels, width, height, source, false) { }
 
-    private GlassBackgroundFrame(byte[] pixels, int width, int height, GlassBackdropSource source, bool ownsPixels)
+    internal GlassBackgroundFrame(byte[] pixels, int width, int height, GlassBackdropSource source, bool ownsPixels)
     {
         ArgumentNullException.ThrowIfNull(pixels);
         if (width <= 0 || height <= 0 || pixels.Length != (long)width * height * 4)
@@ -33,22 +37,40 @@ internal sealed class GlassBackgroundFrame
     // Only newly allocated buffers may be transferred; capture buffers still require a snapshot.
     internal static GlassBackgroundFrame FromOwnedPixels(byte[] pixels, int width, int height, GlassBackdropSource source)
         => new(pixels, width, height, source, true);
+
+    internal static GlassBackgroundFrame FromCapture(BackdropFrame captured)
+    {
+        if (!MemoryMarshal.TryGetArray(captured.Pixels, out var segment) || segment.Offset != 0
+            || segment.Count != segment.Array!.Length)
+        {
+            using (captured) return FromOwnedPixels(captured.Pixels.ToArray(), captured.Request.Width, captured.Request.Height, captured.Source);
+        }
+        return new(segment.Array, captured.Request.Width, captured.Request.Height, captured.Source, true)
+            { _lease = captured, Sequence = captured.ContentRevision, CaptureGeneration = captured.Request.Generation, IsCaptured = true };
+    }
+    public void Dispose() => Interlocked.Exchange(ref _lease, null)?.Dispose();
+    internal static GlassBackgroundFrame FromExtensionLease(SamplePixelLease lease, GlassBackgroundFrame original, int width, int height)
+        => new(lease.Pixels, width, height, original.Source, true)
+        { _lease = lease, Sequence = original.Sequence, CaptureGeneration = original.CaptureGeneration, IsCaptured = original.IsCaptured };
 }
 
 /// <summary>Background stage: acquire self-excluded desktop pixels or a wallpaper fallback.</summary>
 internal sealed class GlassBackgroundLayer : IDisposable
 {
+    internal sealed record CaptureTiming(long SourceTicks, long StartTicks, long EndTicks, object PixelStatistics);
+    internal CaptureTiming? LastCaptureTiming { get; private set; }
     public static TimeSpan LiveFrameInterval => TimeSpan.FromMilliseconds(16);
     public static TimeSpan TransitionFrameInterval => LiveFrameInterval;
     private readonly SharedBackdropFeed _compatible = new();
     private readonly SharedBackdropFeed _wallpaperFeed = new((region, _, trace) =>
         new IsolatedDesktopSceneCapture(region, GlassBackdropSource.Wallpaper, trace));
-    private GlassBackgroundFrame? _lastLive;
-    private BackdropFrame? _lastCapture;
-    private (PixelRect Region, int Width, int Height) _lastLiveGeometry;
     private long _pendingSince;
     private GlassBackgroundFrame? _basic;
+    private SamplePixelPool _extensionPool = new();
+    private bool _sleeping;
     internal bool RequiresBasicBackground { get; private set; }
+    internal object InspectPerformance() => new
+    { live = _compatible.InspectPerformance(), wallpaper = _wallpaperFeed.InspectPerformance() };
 
     public GlassBackgroundFrame? Capture(PixelRect region, int width, int height, double radius, bool allowDesktop)
     {
@@ -62,17 +84,8 @@ internal sealed class GlassBackgroundLayer : IDisposable
             && captured is not null)
         {
             _pendingSince = 0; RequiresBasicBackground = false;
-            if (_lastLive is not null && _lastLiveGeometry == (region, width, height)
-                && _lastLive.Source == captured.Source
-                && (ReferenceEquals(_lastCapture, captured) || captured.Pixels.Span.SequenceEqual(_lastLive.Pixels)))
-            {
-                _lastCapture = captured;
-                return _lastLive;
-            }
-            _lastCapture = captured;
-            _lastLiveGeometry = (region, width, height);
-            return _lastLive = GlassBackgroundFrame.FromOwnedPixels(captured.Pixels.ToArray(), width, height,
-                captured.Source);
+            LastCaptureTiming = Describe(captured);
+            return GlassBackgroundFrame.FromCapture(captured);
         }
 
         // Tooltips/menus deliberately stop screen capture. Replay only the previous safe
@@ -101,10 +114,27 @@ internal sealed class GlassBackgroundLayer : IDisposable
         if (_wallpaperFeed.TryRead(region, width, height, out var wallpaper) && wallpaper is not null)
         {
             RequiresBasicBackground = false;
-            return GlassBackgroundFrame.FromOwnedPixels(wallpaper.Pixels.ToArray(), width, height, GlassBackdropSource.Wallpaper);
+            LastCaptureTiming = Describe(wallpaper);
+            return GlassBackgroundFrame.FromCapture(wallpaper);
         }
         RequiresBasicBackground = true;
         return Basic(width, height);
+    }
+
+    private static CaptureTiming Describe(BackdropFrame frame)
+    {
+        var pixels = frame.Pixels.Span;
+        var count = pixels.Length / 4; var step = Math.Max(1, count / 512);
+        var samples = 0; var black = 0; var transparent = 0; long sum = 0;
+        for (var pixel = 0; pixel < count; pixel += step)
+        {
+            var i = pixel * 4; var maximum = Math.Max(pixels[i], Math.Max(pixels[i + 1], pixels[i + 2]));
+            samples++; if (maximum <= 3) black++; if (pixels[i + 3] == 0) transparent++;
+            sum += pixels[i] + pixels[i + 1] + pixels[i + 2];
+        }
+        return new(frame.SourceTicks, frame.StartTicks, frame.EndTicks, new
+        { samples, nearBlackFraction = (double)black / Math.Max(1, samples),
+            transparentFraction = (double)transparent / Math.Max(1, samples), meanChannel = (double)sum / Math.Max(1, samples * 3) });
     }
 
     private GlassBackgroundFrame Basic(int width, int height)
@@ -123,19 +153,28 @@ internal sealed class GlassBackgroundLayer : IDisposable
     {
         _compatible.Suspend();
         _wallpaperFeed.Suspend();
-        _lastLive = null;
-        _lastCapture = null;
-        _lastLiveGeometry = default;
+        _pendingSince = 0; RequiresBasicBackground = false;
+        LastCaptureTiming = null;
+    }
+
+    public void SetPerformanceSleeping(bool sleeping)
+    {
+        _sleeping = sleeping;
+        if (sleeping) { _extensionPool.Dispose(); _extensionPool = new(); }
+        _compatible.SetPerformanceSleeping(sleeping);
+        _wallpaperFeed.SetPerformanceSleeping(sleeping);
+        _basic = null;
+        LastCaptureTiming = null;
         _pendingSince = 0; RequiresBasicBackground = false;
     }
 
     public void Dispose()
     {
+        _extensionPool.Dispose();
         _compatible.Dispose();
         _wallpaperFeed.Dispose();
-        _lastLive = null;
-        _lastCapture = null;
-        _lastLiveGeometry = default;
+        _basic = null;
+        LastCaptureTiming = null;
         _pendingSince = 0; RequiresBasicBackground = false;
     }
 
@@ -146,6 +185,29 @@ internal sealed class GlassBackgroundLayer : IDisposable
         if (capturedRegion == requestedRegion && frame.Width == width && frame.Height == height)
             return frame;
         var pixels = new byte[checked(width * height * 4)];
+        CopyExtendedPixels(frame, capturedRegion, requestedRegion, width, height, pixels);
+        return new(pixels, width, height, frame.Source, true)
+            { Sequence = frame.Sequence, CaptureGeneration = frame.CaptureGeneration, IsCaptured = frame.IsCaptured };
+    }
+
+    internal GlassBackgroundFrame? ExtendCapturedFrame(GlassBackgroundFrame frame,
+        PixelRect capturedRegion, PixelRect requestedRegion, int width, int height)
+    {
+        if (_sleeping) return null;
+        if (capturedRegion == requestedRegion && frame.Width == width && frame.Height == height) return frame;
+        var lease = _extensionPool.TryRent(checked(width * height * 4));
+        if (lease is null) return null;
+        try
+        {
+            CopyExtendedPixels(frame, capturedRegion, requestedRegion, width, height, lease.Pixels);
+            return GlassBackgroundFrame.FromExtensionLease(lease, frame, width, height);
+        }
+        catch { lease.Dispose(); throw; }
+    }
+
+    private static void CopyExtendedPixels(GlassBackgroundFrame frame,
+        PixelRect capturedRegion, PixelRect requestedRegion, int width, int height, byte[] pixels)
+    {
         var columns = ArrayPool<int>.Shared.Rent(width);
         try
         {
@@ -170,7 +232,6 @@ internal sealed class GlassBackgroundLayer : IDisposable
                     for (var x = 0; x < width; x++) row[x] = source[sourceY * frame.Width + columns[x]];
                 previousSourceY = sourceY;
             }
-            return GlassBackgroundFrame.FromOwnedPixels(pixels, width, height, frame.Source);
         }
         finally { ArrayPool<int>.Shared.Return(columns); }
     }

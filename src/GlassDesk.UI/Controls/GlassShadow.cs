@@ -86,7 +86,12 @@ public sealed class GlassShadow : IDisposable
         _transitionRadius = double.IsFinite(radius) ? Math.Max(0, radius) : 0;
         _transitionStrength = double.IsFinite(strength) ? Math.Clamp(strength, 0, 1) : 1;
         _window.Opacity = _owner.Opacity * _transitionStrength;
-        if (_window.IsVisible) UpdatePanelGeometry();
+        // Sliding content does not move the fixed owner HWND, so no owner-change
+        // event will reconcile a zero-opacity shadow. Hide its HWND explicitly;
+        // a visible transparent shadow still blocks safe desktop sampling.
+        if (_transitionStrength <= 0) Hide();
+        else if (!_window.IsVisible) Update();
+        else UpdatePanelGeometry();
     }
 
     /// <summary>Synchronizes visibility, physical position, DPI, geometry, opacity, and Z order.</summary>
@@ -98,7 +103,7 @@ public sealed class GlassShadow : IDisposable
         try
         {
             var ownerHandle = new WindowInteropHelper(_owner).Handle;
-            if (!_owner.IsVisible || _owner.WindowState == WindowState.Minimized || _owner.Opacity <= 0
+            if (!_owner.IsVisible || _owner.WindowState == WindowState.Minimized || _owner.Opacity <= 0 || _transitionStrength <= 0
                 || !WindowShadowStyles.IsOwnerVisible(ownerHandle)
                 || DisplayService.GetWindowPixelBounds(ownerHandle) is not { Width: > 0, Height: > 0 } bounds)
             {
@@ -210,6 +215,8 @@ public sealed class GlassShadow : IDisposable
     private void Hide()
     {
         if (_window.IsVisible) _window.Hide();
+        // Drop the large layered shadow backing surface while it is not displayed.
+        _window.Width = 1; _window.Height = 1;
     }
 
     private void Observe(DependencyProperty property)

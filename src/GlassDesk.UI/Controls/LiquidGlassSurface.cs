@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Diagnostics;
+using System.IO;
 using System.Globalization;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -16,8 +17,8 @@ namespace GlassDesk.UI.Controls;
 public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
 {
     private readonly GlassBackgroundLayer _background = new();
-    private readonly LiquidGlassOptics _optics = new();
-    private readonly AndroidLiquidGlassRenderer _androidGlass = new();
+    private LiquidGlassOptics _optics = new();
+    private AndroidLiquidGlassRenderer _androidGlass = new();
     private readonly GlassFrameWorker _worker = new();
     private readonly DispatcherTimer _timer;
     private TimeSpan _refreshInterval = GlassBackgroundLayer.LiveFrameInterval;
@@ -26,8 +27,28 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
     private long _lastRenderingTicks;
     private bool _renderFrameQueued;
     private DispatcherOperation? _renderFrameOperation;
+    private DispatcherOperation? _refreshOperation;
+    private bool _performanceSleeping;
+    private long _lastRenderTicks, _renderCount;
+    private bool? _firstVisibleRenderMaterialReady;
+    private bool _lastRenderMaterialReady;
+    private long _lifecycleGeneration;
+    private long _lastCaptureSequence, _lastCaptureGeneration;
     private int _renderFrameSignals;
     private readonly TransitionGlassLayer _transitionLayer = new();
+    private readonly TransitionGlassLayer _compatibilityLayer = new();
+    private BitmapSource? _compatibilityBackdrop;
+    private Rect _compatibilityBounds;
+    private bool _wallpaperPreparationPending;
+    private CancellationTokenSource? _wallpaperCancellation;
+    private long _handoffStarted;
+    private (Rect Panel, double Radius) _compatibilityClipKey;
+    private MaterialStamp? _materialStamp, _compatibilityStamp;
+    private sealed record MaterialStamp(Point Origin, Rect CaptureBounds, DpiScale Dpi, GlassMaterialMode Material,
+        bool Dark, double Clarity, bool Launchpad, LiquidGlassSamplingParameters Sampling,
+        LiquidGlassWeightParameters Weights, LiquidGlassLodParameters Lod,
+        LiquidGlassFinishingParameters Finishing, LiquidGlassBrdfParameters Brdf,
+        LiquidGlassDispersionParameters Dispersion, long RecoveryGeneration);
     private ThemeService? _theme;
     private double _observedBackgroundClarity = .5;
     private double _transitionBlurRadius;
@@ -60,6 +81,14 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
     private GlassBackdropScene? _frameScene, _transitionBackdropScene;
     private long _materialRetentionUntil;
     internal Func<GlassBackdropScene?> ReadBackdropScene { get; set; }
+    internal Func<PixelRect, int, int, byte[]?> CaptureRevealBackdrop { get; set; }
+    private GlassBackdropScene? _compatibilityScene;
+    private bool _compatibilityIsDesktopSnapshot;
+    private Point? _revealOrigin;
+    private PixelRect? _revealHost;
+    private int _preparedDesktopSnapshots;
+    private string? _firstVisibleMaterialSource;
+    internal string? RevealMaterialInvalidationReason { get; private set; }
     public Func<bool>? IsBackdropActive { get; set; }
     /// <summary>Large launchpad profile; Dock retains its compact material.</summary>
     public bool UseLaunchpadOptics { get; set; }
@@ -125,9 +154,11 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
     public LiquidGlassSurface()
     {
         ReadBackdropScene = CaptureBackdropScene;
+        CaptureRevealBackdrop = CaptureHiddenDesktop;
         _backdropScene = ReadBackdropScene();
         IsHitTestVisible = false;
         AddVisualChild(_transitionLayer);
+        AddVisualChild(_compatibilityLayer);
         RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.HighQuality);
         _timer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(100) };
         _timer.Tick += OnWatchdogFrame;
@@ -140,17 +171,21 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
                 _theme.Changed += OnAppearanceChanged;
                 _observedBackgroundClarity = BackgroundClarity;
             }
-            RequestBackdropRefresh(revealing: true); _timer.Start();
+            RequestBackdropRefresh(revealing: true);
+            if (!_performanceSleeping && IsVisible && IsBackdropActive?.Invoke() != false) _timer.Start();
         };
         Unloaded += (_, _) => Dispose();
         IsVisibleChanged += (_, _) =>
         {
+            _firstVisibleRenderMaterialReady = null;
+            _firstVisibleMaterialSource = null;
             UpdateRenderClock();
             if (!IsVisible)
             {
                 // Keep material and suspend readback; the compatible session stays warm
                 // while live geometry decides whether the previous mask fits.
                 _worker.Invalidate(); _worker.ClearCachedBuffers(); _lastSource = null; _background.Suspend();
+                _timer.Stop(); StopRenderClock(); CancelQueuedRefresh();
             }
             else RequestBackdropRefresh(revealing: true);
         };
@@ -160,15 +195,77 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
     public void RequestBackdropRefresh(bool revealing = false)
     {
         EnsureBackdropScene(revealing);
+        if (_performanceSleeping) { InvalidateVisual(); return; }
         SetTimerInterval(GlassBackgroundLayer.LiveFrameInterval);
         if (_refreshPending) return;
         _refreshPending = true;
-        Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
+        var generation = _lifecycleGeneration;
+        _refreshOperation = Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
         {
+            _refreshOperation = null;
             _refreshPending = false;
-            if (IsLoaded) OnFrame(null, EventArgs.Empty);
+            if (!_performanceSleeping && generation == _lifecycleGeneration && IsLoaded) OnFrame(null, EventArgs.Empty);
         }));
         InvalidateVisual();
+    }
+
+    /// <summary>Retire capture, optical work and large presentation resources until a fresh reveal.</summary>
+    public void SetPerformanceSleeping(bool sleeping)
+    {
+        if (_performanceSleeping == sleeping) return;
+        _performanceSleeping = sleeping;
+        ++_lifecycleGeneration;
+        _worker.Invalidate(); _worker.ClearCachedBuffers();
+        _lastSource = null;
+        _lastCaptureSequence = _lastCaptureGeneration = 0;
+        _background.SetPerformanceSleeping(sleeping);
+        _transitionLayer.SetPerformanceSleeping(sleeping);
+        _compatibilityLayer.SetPerformanceSleeping(sleeping);
+        if (sleeping)
+        {
+            _timer.Stop(); StopRenderClock(); CancelQueuedRefresh();
+            _optics = new(); _androidGlass = new();
+            _opticalFrameTimestamps.Clear(); _opticalRefreshRate = 0;
+            _handoffStarted = 0;
+            // Deep sleep reacquires the current desktop on the next reveal. Retaining
+            // a hidden full-size texture also retains WPF's shader input resources.
+            _frame = null; _frameScene = null;
+            _transitionBackdrop = null; _transitionBackdropScene = null;
+            _materialStamp = null;
+            _compatibilityBackdrop = null; _compatibilityStamp = null;
+            _compatibilityIsDesktopSnapshot = false; _compatibilityScene = null;
+            _compatibilityLayer.SetBackdrop(null); _compatibilityLayer.Opacity = 0;
+            _wallpaperPreparationPending = false;
+            _wallpaperCancellation?.Cancel(); _wallpaperCancellation = null;
+        }
+        else if (IsLoaded && IsVisible && IsBackdropActive?.Invoke() != false)
+        {
+            _timer.Start(); RequestBackdropRefresh(revealing: true);
+        }
+        InvalidateVisual();
+    }
+
+    public object InspectPerformance() => new
+    {
+        sleeping = _performanceSleeping, generation = _lifecycleGeneration,
+        renderClockAttached = _renderClockAttached, watchdogEnabled = _timer.IsEnabled,
+        renderQueued = _renderFrameQueued, refreshQueued = _refreshPending, opticsBusy = _worker.IsBusy,
+        lastRenderTicks = _lastRenderTicks, renderCount = _renderCount, lastRenderMaterialReady = _lastRenderMaterialReady,
+        firstVisibleRenderMaterialReady = _firstVisibleRenderMaterialReady,
+        firstVisibleMaterialSource = _firstVisibleMaterialSource,
+        materialReady = _frame is not null || _transitionBackdrop is not null || _compatibilityBackdrop is not null,
+        compatibilityReady = _compatibilityBackdrop is not null, handoffActive = _handoffStarted != 0,
+        compatibilityIsDesktopSnapshot = _compatibilityIsDesktopSnapshot,
+        preparedDesktopSnapshots = _preparedDesktopSnapshots, revealMaterialInvalidationReason = RevealMaterialInvalidationReason,
+        capture = _background.InspectPerformance(),
+        source = BackdropSource.ToString(), retainedPixelBytes = (long)(_frame?.PixelWidth ?? 0) * (_frame?.PixelHeight ?? 0) * 4
+            + (long)(_transitionBackdrop?.PixelWidth ?? 0) * (_transitionBackdrop?.PixelHeight ?? 0) * 4
+            + (long)(_compatibilityBackdrop?.PixelWidth ?? 0) * (_compatibilityBackdrop?.PixelHeight ?? 0) * 4
+    };
+
+    private void CancelQueuedRefresh()
+    {
+        _refreshOperation?.Abort(); _refreshOperation = null; _refreshPending = false;
     }
 
     public void Dispose()
@@ -178,29 +275,45 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         _worker.Invalidate();
         _worker.ClearCachedBuffers();
         StopRenderClock();
+        CancelQueuedRefresh(); ++_lifecycleGeneration;
+        _wallpaperCancellation?.Cancel(); _wallpaperCancellation = null;
         _timer.Stop(); _background.Dispose(); _frame = null; _lastSource = null;
         _transitionBackdrop = null;
+        _compatibilityBackdrop = null;
         _frameScene = null; _transitionBackdropScene = null;
-        UpdateTransitionLayer();
+        _transitionLayer.SetBackdrop(null); _transitionLayer.Opacity = 0;
+        _compatibilityLayer.SetBackdrop(null); _compatibilityLayer.Opacity = 0;
         BackdropSource = GlassBackdropSource.Transparent;
     }
 
     private void OnAppearanceChanged(object? sender, EventArgs e)
     {
+        // The notification can represent wallpaper/system changes even when the
+        // resolved theme and transparency numbers remain identical.
+        ++_lifecycleGeneration;
+        _wallpaperCancellation?.Cancel(); _wallpaperCancellation = null;
+        _wallpaperPreparationPending = false;
+        _frame = null; _frameScene = null;
+        _transitionBackdrop = null; _transitionBackdropScene = null;
+        _compatibilityBackdrop = null; _compatibilityStamp = null;
+        _materialStamp = null; _handoffStarted = 0;
+        _background.Suspend();
         var clarity = BackgroundClarity;
-        if (clarity == _observedBackgroundClarity) return;
+        // Theme and material changes invalidate pixels even when clarity is unchanged.
         _observedBackgroundClarity = clarity;
         _worker.Invalidate();
         _lastSource = null;
         SetTimerInterval(GlassBackgroundLayer.LiveFrameInterval);
         // Theme updates may originate outside a Dispatcher callback (including startup).
         // Queue the capture so its awaited worker resumes in WPF's UI context.
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => OnFrame(null, EventArgs.Empty)));
+        RequestBackdropRefresh();
         InvalidateVisual();
     }
 
     private async void OnFrame(object? sender, EventArgs e)
     {
+        if (_performanceSleeping) return;
+        var lifecycleGeneration = _lifecycleGeneration;
         if (!RenderCapability.IsPixelShaderVersionSupported(3, 0)) GlassDesk.UI.BackdropRecovery.UseBasicRendering();
         EnsureBackdropScene();
         if (Window.GetWindow(this) is not GlassWindow owner || !owner.IsVisible || !IsVisible
@@ -210,6 +323,7 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
             _worker.ClearCachedBuffers();
             SetTimerInterval(TimeSpan.FromMilliseconds(200));
             _background.Suspend(); _lastSource = null;
+            _timer.Stop(); StopRenderClock();
             return;
         }
         if (owner.PrimaryDisplaySession is { IsAvailable: false })
@@ -245,7 +359,8 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         var material = ThemeService.Current?.Appearance.GlassMaterial ?? GlassMaterialMode.AndroidLiquidGlass;
         var dark = ThemeService.Current?.IsDark != false;
         var backgroundClarity = BackgroundClarity;
-        var useAndroidGlass = material == GlassMaterialMode.AndroidLiquidGlass && debugView == LiquidGlassDebugView.None;
+        var useAndroidGlass = (material is GlassMaterialMode.AndroidLiquidGlass or GlassMaterialMode.FrostedGlass)
+            && debugView == LiquidGlassDebugView.None;
         var transitionCapture = useAndroidGlass ? _transitionCaptureBounds : null;
         var transitionBackdrop = transitionCapture is not null;
         var finishingParameters = LiquidGlassDebugState.FinishingParameters;
@@ -331,13 +446,13 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         var sampledFrameBounds = captureGeometry.FrameBoundsDip;
         // Background is captured first. The glass stage below only reads this fixed frame;
         // WPF content is a separate visual above LiquidGlassSurface in each window.
-        var background = _background.Capture(region,
+        using var capturedBackground = _background.Capture(region,
             Math.Max(1, (int)Math.Floor(region.Width * scale)),
             Math.Max(1, (int)Math.Floor(region.Height * scale)), radius,
             owner.SurfaceMode == GlassSurfaceMode.OpticalGlass);
         var capturedScene = _backdropScene;
-        if (background is not null)
-            background = GlassBackgroundLayer.ExtendCapture(background, region, requestedRegion, width, height);
+        using var background = capturedBackground is null ? null
+            : _background.ExtendCapturedFrame(capturedBackground, region, requestedRegion, width, height);
         var source = background?.Pixels;
         var kind = background?.Source ?? GlassBackdropSource.Transparent;
         BackdropSource = kind;
@@ -359,8 +474,9 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         // texture, masked by current geometry, until a fresh source replaces it.
         if (source is null) { _lastSource = null; }
         else if ((transitionBackdrop ? _transitionBackdrop is null : _frame is null)
-            || _frameKey != key || _lastSource is null
-            || !ReferenceEquals(source, _lastSource) && !source.AsSpan().SequenceEqual(_lastSource))
+            || _frameKey != key
+            || (background!.IsCaptured ? background.Sequence != _lastCaptureSequence || background.CaptureGeneration != _lastCaptureGeneration
+                : _lastSource is null || !ReferenceEquals(source, _lastSource)))
         {
             // Capture and optics follow the current panel, independently of content scale.
             // Cached geometry is rebuilt only when its physical sampling parameters change.
@@ -369,23 +485,28 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
             var wallpaperWeights = applyWallpaperShoulder
                 ? CaptureWallpaperShoulderWeights(owner, width, height, sampleSizeDip, glassBoundsDip, radius)
                 : null;
+            // Queued composition must retain its original renderer. Deep sleep replaces
+            // those cache owners; an old task must not rebuild the new sleeping caches.
+            var optics = _optics; var androidGlass = _androidGlass;
             using var result = transitionBackdrop
                 ? await _worker.RenderBufferedAsync(source.Length, (pixels, scratch) =>
-                    AndroidLiquidGlassRenderer.RenderTransitionBackdropInto(source, pixels, scratch, width, height, sampleSizeDip, dark, strength,
-                        backgroundClarity: backgroundClarity, launchpadOptics: launchpadOptics))
-                : await _worker.RenderAsync(() => LiquidGlassFrameComposer.Compose(_optics, source, width, height,
+                    RenderMaterialBackdropInto(material, source, pixels, scratch, width, height, sampleSizeDip, dark, strength,
+                        backgroundClarity, launchpadOptics))
+                : await _worker.RenderAsync(() => LiquidGlassFrameComposer.Compose(optics, source, width, height,
                 sampleSizeDip, radius, squircle, strength, _transitionBlurRadius, debugView,
                 samplingParameters, weightParameters, glassBoundsDip, lodParameters,
                 finishingParameters, brdfParameters, dispersionParameters,
                 wallpaperWeights is not null
                     ? pixels => ApplyWallpaperShoulder(pixels, wallpaperWeights)
-                : null, material, dark, _androidGlass, backgroundClarity: backgroundClarity, launchpadOptics: launchpadOptics));
+                : null, material, dark, androidGlass, backgroundClarity: backgroundClarity, launchpadOptics: launchpadOptics));
             EnsureBackdropScene();
-            if (result is null || !_worker.IsCurrent(result) || !owner.IsVisible || !IsVisible || IsBackdropActive?.Invoke() == false
+            if (result is null || !_worker.IsCurrent(result) || _performanceSleeping || lifecycleGeneration != _lifecycleGeneration
+                || !owner.IsVisible || !IsVisible || IsBackdropActive?.Invoke() == false
                 || owner.PrimaryDisplaySession is { IsAvailable: false }
                 || ThemeService.Current?.UseOpaquePanels == true
                 || backgroundClarity != BackgroundClarity || capturedScene is null || !capturedScene.Equals(_backdropScene)) return;
             var refracted = result.Pixels;
+            if (_compatibilityBackdrop is not null && _handoffStarted == 0) _handoffStarted = Stopwatch.GetTimestamp();
             if (transitionBackdrop)
             {
                 if (!capturedScene.Equals(_frameScene)) { _frame = null; _frameScene = null; }
@@ -408,8 +529,10 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
             _lastOpticsMilliseconds = result.Milliseconds;
             _materialRetentionUntil = 0;
             _frameUsesAndroidGlass = useAndroidGlass;
+            _materialStamp = ReadMaterialStamp();
             _opticalFrameTimestamps.Enqueue(Stopwatch.GetTimestamp());
-            _lastSource = source; _frameKey = key;
+            _lastSource = background!.IsCaptured ? null : source; _frameKey = key;
+            _lastCaptureSequence = background.Sequence; _lastCaptureGeneration = background.CaptureGeneration;
         }
         if (!transitionBackdrop && _frame is not null)
         {
@@ -487,6 +610,17 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         var rect = _panelShape ?? new Rect(0, 0, ActualWidth, ActualHeight);
         var glass = Window.GetWindow(this) as GlassWindow;
         var radius = _panelShape is null ? glass?.PanelCornerRadius.TopLeft ?? 40 : _panelRadius;
+        _lastRenderTicks = Stopwatch.GetTimestamp(); ++_renderCount;
+        _lastRenderMaterialReady = ThemeService.Current?.UseOpaquePanels == true || _background.RequiresBasicBackground
+            || _frame is not null && _sampledGlassPanelBounds == rect && _sampledGlassPanelRadius == radius
+            || _transitionBackdrop is not null && _transitionBackdropBounds.Contains(rect)
+            || _compatibilityBackdrop is not null && _compatibilityLayer.Opacity > 0
+                && _compatibilityLayer.RenderSize.Width > 0 && _compatibilityLayer.RenderSize.Height > 0;
+        _firstVisibleRenderMaterialReady ??= _lastRenderMaterialReady;
+        _firstVisibleMaterialSource ??= _compatibilityIsDesktopSnapshot && _compatibilityBackdrop is not null
+            && _compatibilityLayer.Opacity > 0 ? "CurrentDesktopSnapshot"
+            : _frame is not null || _transitionBackdrop is not null ? "CompletedLiveMaterial"
+            : ThemeService.Current?.UseOpaquePanels == true ? "OpaquePreference" : "AmbientCompatibility";
         var transition = Math.Clamp(_transitionProgress, 0, 1);
         var highlightScale = .48 + .52 * transition;
         var debugView = LiquidGlassDebugState.View;
@@ -512,7 +646,7 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         }
 
         dc.PushClip(CreatePanel(rect, radius));
-        if (ThemeService.Current?.UseOpaquePanels == true || _background.RequiresBasicBackground)
+        if (ThemeService.Current?.UseOpaquePanels == true || BackdropRecovery.RequiresBasicRendering)
         {
             dc.DrawRectangle(new SolidColorBrush(dark ? Color.FromRgb(28, 29, 34) : Color.FromRgb(246, 247, 250)), null, rect);
             if (_background.RequiresBasicBackground) DrawCompatibilityNotice(dc, rect, "基础背景 · 正在恢复实时效果", dark);
@@ -520,7 +654,7 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         }
         var compatibleChrome = debugView == LiquidGlassDebugView.None && (_frameUsesAndroidGlass
             || _frame is null && (ThemeService.Current?.Appearance.GlassMaterial ?? GlassMaterialMode.AndroidLiquidGlass)
-                == GlassMaterialMode.AndroidLiquidGlass);
+                is GlassMaterialMode.AndroidLiquidGlass or GlassMaterialMode.FrostedGlass);
         var opticalFrameMatches = _frame is not null && _sampledGlassPanelBounds == rect
             && _sampledGlassPanelRadius == radius;
         var useTransitionMaterial = _transitionCaptureBounds is not null || !opticalFrameMatches;
@@ -615,41 +749,296 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         dc.DrawText(label, new Point(Math.Max(rect.Left + 12, rect.Right - label.Width - 16), rect.Bottom - label.Height - 12));
     }
 
-    protected override int VisualChildrenCount => 1;
-    protected override Visual GetVisualChild(int index) => index == 0 ? _transitionLayer
-        : throw new ArgumentOutOfRangeException(nameof(index));
+    protected override int VisualChildrenCount => 2;
+    protected override Visual GetVisualChild(int index) => index switch
+        { 0 => _transitionLayer, 1 => _compatibilityLayer, _ => throw new ArgumentOutOfRangeException(nameof(index)) };
 
     protected override Size MeasureOverride(Size availableSize)
     {
         _transitionLayer.Measure(availableSize);
+        _compatibilityLayer.Measure(availableSize);
         return base.MeasureOverride(availableSize);
     }
 
     protected override Size ArrangeOverride(Size finalSize)
     {
+        UpdateTransitionLayer(finalSize);
         _transitionLayer.Arrange(_transitionBackdropBounds.Width > 0
             ? _transitionBackdropBounds : new Rect(finalSize));
+        _compatibilityLayer.Arrange(new Rect(finalSize));
         return finalSize;
     }
 
-    private void UpdateTransitionLayer()
+    private void UpdateTransitionLayer(Size? layoutSize = null)
     {
-        var panel = _panelShape ?? new Rect(RenderSize);
+        var size = layoutSize ?? RenderSize;
+        var panel = _panelShape ?? new Rect(size);
         var radius = _panelShape is null ? (Window.GetWindow(this) as GlassWindow)?.PanelCornerRadius.TopLeft ?? 40 : _panelRadius;
         var opticalMatches = _frame is not null && _sampledGlassPanelBounds == panel && _sampledGlassPanelRadius == radius;
         var enabled = (_transitionCaptureBounds is not null || !opticalMatches)
+            && !_background.RequiresBasicBackground
             && _transitionBackdrop is not null && _transitionBackdropBounds.Contains(panel)
             && LiquidGlassDebugState.View == LiquidGlassDebugView.None
             && ThemeService.Current?.UseOpaquePanels != true
-            && (ThemeService.Current?.Appearance.GlassMaterial ?? GlassMaterialMode.AndroidLiquidGlass) == GlassMaterialMode.AndroidLiquidGlass;
+            && (ThemeService.Current?.Appearance.GlassMaterial ?? GlassMaterialMode.AndroidLiquidGlass)
+                is GlassMaterialMode.AndroidLiquidGlass or GlassMaterialMode.FrostedGlass;
         _transitionLayer.SetBackdrop(enabled ? _transitionBackdrop : null);
         _transitionLayer.Opacity = enabled ? 1 : 0;
-        if (enabled) _transitionLayer.SetPanel(panel, _transitionBackdropBounds, radius, .6 + .4 * _transitionProgress, UseLaunchpadOptics);
+        var frosted = ThemeService.Current?.Appearance.GlassMaterial == GlassMaterialMode.FrostedGlass;
+        if (enabled) _transitionLayer.SetPanel(panel, _transitionBackdropBounds, radius, .6 + .4 * _transitionProgress, UseLaunchpadOptics, frosted);
+        var liveReady = !_background.RequiresBasicBackground && (enabled || opticalMatches);
+        var needsCompatibility = ThemeService.Current?.UseOpaquePanels != true
+            && !BackdropRecovery.RequiresBasicRendering && LiquidGlassDebugState.View == LiquidGlassDebugView.None
+            && (!liveReady || _handoffStarted != 0);
+        if (needsCompatibility && size.Width > 0 && size.Height > 0)
+        {
+            PrepareCompatibleMaterial(size);
+            var opacity = !liveReady || _handoffStarted == 0 ? 1
+                : Math.Clamp(1 - Stopwatch.GetElapsedTime(_handoffStarted).TotalMilliseconds / 100, 0, 1);
+            _compatibilityLayer.SetBackdrop(_compatibilityBackdrop);
+            if (_compatibilityLayer.Clip is null || _compatibilityClipKey != (panel, radius))
+            {
+                _compatibilityClipKey = (panel, radius);
+                _compatibilityLayer.Clip = _panelGeometry ?? (Window.GetWindow(this) is GlassWindow glass
+                    ? glass.CreateGlassPanelGeometry(panel, radius) : SquircleGlassGeometry.Create(panel, radius));
+            }
+            _compatibilityLayer.SetPanel(panel, _compatibilityBounds, radius, .6 + .4 * _transitionProgress, UseLaunchpadOptics, frosted);
+            _compatibilityLayer.Opacity = opacity;
+            if (opacity == 0)
+            {
+                _handoffStarted = 0; _compatibilityBackdrop = null; _compatibilityStamp = null;
+                _compatibilityIsDesktopSnapshot = false; _compatibilityScene = null;
+                _compatibilityLayer.SetBackdrop(null);
+            }
+        }
+        else { _compatibilityLayer.Opacity = 0; _compatibilityLayer.SetBackdrop(null); }
+    }
+
+    private static void RenderMaterialBackdropInto(GlassMaterialMode material, byte[] source, byte[] pixels,
+        byte[] scratch, int width, int height, Size size, bool dark, double strength, double clarity, bool launchpad)
+    {
+        if (material == GlassMaterialMode.FrostedGlass)
+            AndroidLiquidGlassRenderer.RenderFrostedBackdropInto(source, pixels, scratch, width, height, size, dark, strength, clarity);
+        else
+            AndroidLiquidGlassRenderer.RenderTransitionBackdropInto(source, pixels, scratch, width, height, size, dark, strength,
+                backgroundClarity: clarity, launchpadOptics: launchpad);
+    }
+
+    private MaterialStamp ReadMaterialStamp()
+    {
+        var origin = new Point();
+        var dpi = VisualTreeHelper.GetDpi(this);
+        if (_revealOrigin is { } preparedOrigin && Window.GetWindow(this) is { IsVisible: false }) origin = preparedOrigin;
+        else if (PresentationSource.FromVisual(this) is not null) origin = PointToScreen(new Point());
+        else if (Window.GetWindow(this) is { } owner && PresentationSource.FromVisual(owner) is not null)
+        {
+            // Before the first Show the surface is not connected yet, but its
+            // hidden HWND already has final screen coordinates and monitor DPI.
+            origin = owner.PointToScreen(new Point()); dpi = VisualTreeHelper.GetDpi(owner);
+        }
+        return new(origin, _transitionCaptureBounds ?? CaptureBoundsInWindow ?? new Rect(RenderSize),
+            dpi, ThemeService.Current?.Appearance.GlassMaterial ?? GlassMaterialMode.AndroidLiquidGlass,
+            ThemeService.Current?.IsDark != false, BackgroundClarity, UseLaunchpadOptics,
+            LiquidGlassDebugState.SamplingParameters, LiquidGlassDebugState.WeightParameters, LiquidGlassDebugState.LodParameters,
+            LiquidGlassDebugState.FinishingParameters, LiquidGlassDebugState.BrdfParameters,
+            LiquidGlassDebugState.DispersionParameters, GlassDesk.UI.BackdropRecovery.Generation);
+    }
+
+    private void PrepareCompatibleMaterial(Size size)
+    {
+        var stamp = ReadMaterialStamp();
+        var bounds = new Rect(size);
+        if (_compatibilityBackdrop is not null && _compatibilityStamp == stamp && _compatibilityBounds == bounds) return;
+        if (_compatibilityIsDesktopSnapshot) RevealMaterialInvalidationReason = $"origin {_compatibilityStamp?.Origin} => {stamp.Origin}; dpi {_compatibilityStamp?.Dpi.DpiScaleX} => {stamp.Dpi.DpiScaleX}; bounds {_compatibilityBounds} => {bounds}; capture {_compatibilityStamp?.CaptureBounds} => {stamp.CaptureBounds}";
+        _compatibilityStamp = stamp; _compatibilityBounds = bounds;
+        // A small, fully opaque ambient texture is immediately available. It contains
+        // no screen pixels and enters the exact production lens, tint and blur path.
+        const int width = 32, height = 24;
+        var source = new byte[width * height * 4];
+        for (var y = 0; y < height; y++)
+        for (var x = 0; x < width; x++)
+        {
+            var i = (y * width + x) * 4;
+            var variation = (byte)(12 * x / width + 14 * y / height);
+            source[i] = (byte)((stamp.Dark ? 51 : 208) + variation);
+            source[i + 1] = (byte)((stamp.Dark ? 43 : 205) + variation);
+            source[i + 2] = (byte)((stamp.Dark ? 37 : 200) + variation);
+            source[i + 3] = 255;
+        }
+        var filtered = new byte[source.Length]; var scratch = new byte[source.Length];
+        RenderMaterialBackdropInto(stamp.Material, source, filtered, scratch, width, height,
+            bounds.Size, stamp.Dark, 1, stamp.Clarity, stamp.Launchpad);
+        var compatible = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, filtered, width * 4);
+        compatible.Freeze(); _compatibilityBackdrop = compatible;
+        _compatibilityIsDesktopSnapshot = false; _compatibilityScene = null;
+        _handoffStarted = 0;
+        // A static Windows wallpaper can differ completely from the composed scene
+        // (including dynamic wallpapers). Do not flash it over the launchpad.
+        if (UseLaunchpadOptics || IsBackdropActive is not null) return;
+        if (_performanceSleeping || _wallpaperPreparationPending || PresentationSource.FromVisual(this) is null) return;
+        PrepareWallpaperMaterial(stamp, bounds);
+    }
+
+    /// <summary>Prepare current, fully filtered glass before a hidden launcher becomes visible.</summary>
+    public void PrepareRevealMaterial(PixelRect host, PixelRect panel, double dpi)
+    {
+        if (Window.GetWindow(this) is not { } revealOwner
+            || revealOwner.IsVisible && IsBackdropActive?.Invoke() != false || ThemeService.Current?.UseOpaquePanels == true
+            || BackdropRecovery.RequiresBasicRendering || host.Width <= 0 || host.Height <= 0) return;
+        var size = new Size(host.Width * 96d / dpi, host.Height * 96d / dpi);
+        _revealOrigin = new Point(host.X, host.Y);
+        _revealHost = host;
+        Measure(size); Arrange(new Rect(size));
+        EnsureBackdropScene(revealing: true);
+        PrimeRevealCapture(host, dpi);
+        if (_frame is not null || _transitionBackdrop is not null) return;
+        if (_compatibilityIsDesktopSnapshot && _compatibilityScene?.Equals(_backdropScene) == true
+            && _compatibilityStamp == ReadMaterialStamp()) return;
+        var region = new PixelRect(Math.Max(host.X, panel.X), Math.Max(host.Y, panel.Y),
+            Math.Min(host.Right, panel.Right) - Math.Max(host.X, panel.X),
+            Math.Min(host.Bottom, panel.Bottom) - Math.Max(host.Y, panel.Y));
+        if (region.Width <= 0 || region.Height <= 0) return;
+        var scale = Math.Min(1, Math.Min(2048d / Math.Max(host.Width, host.Height),
+            Math.Sqrt(320_000d / ((double)host.Width * host.Height))));
+        var width = Math.Max(1, (int)Math.Floor(host.Width * scale));
+        var height = Math.Max(1, (int)Math.Floor(host.Height * scale));
+        var captureWidth = Math.Max(1, (int)Math.Floor(region.Width * scale));
+        var captureHeight = Math.Max(1, (int)Math.Floor(region.Height * scale));
+        var scene = _backdropScene;
+        var pixels = CaptureRevealBackdrop(region, captureWidth, captureHeight);
+        if (pixels is null || pixels.Length != captureWidth * captureHeight * 4 || IsSolidBlack(pixels)
+            || scene is null || !scene.Equals(ReadBackdropScene())) return;
+        // Extend only outside the destination panel. The Dock lies outside this
+        // capture and cannot be burnt into the expanding or resting launchpad.
+        var source = new byte[width * height * 4];
+        for (var y = 0; y < height; y++)
+        {
+            var sy = Math.Clamp((int)((host.Y + (y + .5) * host.Height / height - region.Y)
+                * captureHeight / region.Height), 0, captureHeight - 1);
+            for (var x = 0; x < width; x++)
+            {
+                var sx = Math.Clamp((int)((host.X + (x + .5) * host.Width / width - region.X)
+                    * captureWidth / region.Width), 0, captureWidth - 1);
+                pixels.AsSpan((sy * captureWidth + sx) * 4, 4).CopyTo(source.AsSpan((y * width + x) * 4, 4));
+            }
+        }
+        var stamp = ReadMaterialStamp();
+        var filtered = new byte[source.Length]; var scratch = new byte[source.Length];
+        RenderMaterialBackdropInto(stamp.Material, source, filtered, scratch, width, height,
+            size, stamp.Dark, 1, stamp.Clarity, stamp.Launchpad);
+        var bitmap = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, filtered, width * 4);
+        bitmap.Freeze();
+        _wallpaperCancellation?.Cancel();
+        _compatibilityBackdrop = bitmap; _compatibilityStamp = stamp; _compatibilityBounds = new Rect(size);
+        _compatibilityScene = scene; _compatibilityIsDesktopSnapshot = true; _handoffStarted = 0;
+        ++_preparedDesktopSnapshots; RevealMaterialInvalidationReason = null;
+        UpdateTransitionLayer(size); InvalidateVisual();
+    }
+
+    private byte[]? CaptureHiddenDesktop(PixelRect region, int width, int height)
+    {
+        using var sampler = new GlassDesk.Platform.DesktopRegionSampler();
+        var owner = Window.GetWindow(this);
+        var emptyOwner = owner is { IsVisible: true } && IsBackdropActive?.Invoke() == false
+            ? new System.Windows.Interop.WindowInteropHelper(owner).Handle : 0;
+        return sampler.TryCaptureBeforeReveal(region, width, height, emptyOwner, out var pixels) ? pixels : null;
+    }
+
+    private void PrimeRevealCapture(PixelRect host, double dpi)
+    {
+        if (_performanceSleeping || Window.GetWindow(this) is not GlassWindow owner
+            || owner.SurfaceMode != GlassSurfaceMode.OpticalGlass) return;
+        var margin = (int)Math.Ceiling(48 * dpi / 96);
+        var requested = new PixelRect(host.X - margin, host.Y - margin,
+            host.Width + margin * 2, host.Height + margin * 2);
+        var display = owner.PrimaryDisplaySession?.Display ?? DisplayService.Primary();
+        if (display is null) return;
+        var region = ClipRegion(requested, display.Bounds);
+        if (region.Width <= 0 || region.Height <= 0) return;
+        var budget = UseLaunchpadOptics
+            ? 320_000 + 680_000 * Math.Clamp((BackgroundClarity - .5) * 2, 0, 1) : 320_000;
+        var scale = Math.Min(1, Math.Min(2048d / Math.Max(requested.Width, requested.Height),
+            Math.Sqrt(budget / ((double)requested.Width * requested.Height))));
+        // Start the existing isolated owner before GDI and filtering block the
+        // Dispatcher. The first visible render uses this same crop and sample size.
+        using var pending = _background.Capture(region, Math.Max(1, (int)Math.Floor(region.Width * scale)),
+            Math.Max(1, (int)Math.Floor(region.Height * scale)), _panelRadius, true);
+    }
+
+    private void PrepareWallpaperMaterial(MaterialStamp stamp, Rect bounds)
+    {
+        _wallpaperPreparationPending = true;
+        var cancellation = new CancellationTokenSource();
+        _wallpaperCancellation = cancellation;
+        var token = cancellation.Token;
+        var generation = _lifecycleGeneration;
+        var scene = _backdropScene;
+        var region = new Rect(stamp.Origin.X, stamp.Origin.Y,
+            bounds.Width * stamp.Dpi.DpiScaleX, bounds.Height * stamp.Dpi.DpiScaleY);
+        var scale = Math.Min(1, Math.Min(2048.0 / Math.Max(region.Width, region.Height),
+            Math.Sqrt(320_000 / (region.Width * region.Height))));
+        var width = Math.Max(1, (int)Math.Floor(region.Width * scale));
+        var height = Math.Max(1, (int)Math.Floor(region.Height * scale));
+        var preparation = new Thread(() =>
+        {
+            BitmapSource? result = null;
+            try
+            {
+                var wallpaper = new WallpaperBackdrop();
+                if (!token.IsCancellationRequested) wallpaper.Update(region, width, height, 0);
+                var pixels = wallpaper.Pixels;
+                // A hidden black Windows wallpaper is common under dynamic wallpaper.
+                // Never show that bitmap as a replacement for the visible background.
+                if (!token.IsCancellationRequested && pixels is not null && !IsSolidBlack(pixels))
+                {
+                    var filtered = new byte[pixels.Length]; var scratch = new byte[pixels.Length];
+                    RenderMaterialBackdropInto(stamp.Material, pixels, filtered, scratch, width, height,
+                        bounds.Size, stamp.Dark, 1, stamp.Clarity, stamp.Launchpad);
+                    result = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, filtered, width * 4);
+                    result.Freeze();
+                }
+            }
+            catch (Exception error) when (error is IOException or InvalidOperationException or System.Runtime.InteropServices.COMException
+                or ArgumentException or NotSupportedException)
+            { Trace.WriteLine("Compatible first material: " + error.Message); }
+            if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) { cancellation.Dispose(); return; }
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+            {
+                if (ReferenceEquals(_wallpaperCancellation, cancellation)) _wallpaperCancellation = null;
+                cancellation.Dispose();
+                if (generation != _lifecycleGeneration) return;
+                _wallpaperPreparationPending = false;
+                if (token.IsCancellationRequested || _compatibilityIsDesktopSnapshot || _performanceSleeping || result is null || stamp != ReadMaterialStamp()
+                    || scene is null || !scene.Equals(_backdropScene) || _handoffStarted != 0
+                    || _frame is not null || _transitionBackdrop is not null) return;
+                _compatibilityBackdrop = result; UpdateTransitionLayer(); InvalidateVisual();
+            }));
+        }) { IsBackground = true, Name = "GlassDesk first wallpaper material" };
+        preparation.SetApartmentState(ApartmentState.STA); preparation.Start();
+    }
+
+    private static bool IsSolidBlack(byte[] pixels)
+    {
+        for (var i = 0; i < pixels.Length; i += 4)
+            if (pixels[i] != 0 || pixels[i + 1] != 0 || pixels[i + 2] != 0) return false;
+        return true;
     }
 
     private void EnsureBackdropScene(bool revealing = false)
     {
         var scene = ReadBackdropScene();
+        if (_compatibilityIsDesktopSnapshot && (scene is null || !scene.Equals(_compatibilityScene)))
+        {
+            RevealMaterialInvalidationReason = "desktop scene changed";
+            _compatibilityBackdrop = null; _compatibilityStamp = null;
+            _compatibilityIsDesktopSnapshot = false; _compatibilityScene = null; _handoffStarted = 0;
+        }
+        var stamp = ReadMaterialStamp();
+        if ((_frame is not null || _transitionBackdrop is not null) && _materialStamp is not null && _materialStamp != stamp)
+        {
+            _frame = null; _frameScene = null; _transitionBackdrop = null; _transitionBackdropScene = null;
+            _worker.Invalidate(); _lastSource = null; _handoffStarted = 0;
+        }
         if (_frame is not null) _frameScene ??= _backdropScene;
         if (_transitionBackdrop is not null) _transitionBackdropScene ??= _backdropScene;
         if (scene is null || !scene.Equals(_backdropScene))
@@ -683,6 +1072,7 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
             _transitionBackdrop = null; _transitionBackdropScene = null; discarded = true;
         }
         if (!discarded) return;
+        _compatibilityBackdrop = null; _compatibilityStamp = null; _handoffStarted = 0;
         _worker.Invalidate(); _lastSource = null;
         if (_frame is null && _transitionBackdrop is null) BackdropSource = GlassBackdropSource.Transparent;
         UpdateTransitionLayer(); InvalidateVisual();
@@ -690,14 +1080,17 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
 
     private GlassBackdropScene? CaptureBackdropScene()
     {
-        if (Window.GetWindow(this) is not GlassWindow owner || PresentationSource.FromVisual(owner) is null
-            || owner.ActualWidth < 1 || owner.ActualHeight < 1) return GlassBackdropScene.Capture();
+        if (Window.GetWindow(this) is not GlassWindow owner) return GlassBackdropScene.Capture();
+        var bounds = !owner.IsVisible && _revealHost is { } prepared ? prepared
+            : DisplayService.GetWindowPixelBounds(new System.Windows.Interop.WindowInteropHelper(owner).Handle);
+        if (bounds is not { Width: > 0, Height: > 0 } pixels) return GlassBackdropScene.Capture();
         // Include the owner's entire animation path and capture guard band, then
         // use the same primary-monitor boundary as desktop acquisition.
-        var first = owner.PointToScreen(new Point(-64, -64));
-        var last = owner.PointToScreen(new Point(owner.ActualWidth + 64, owner.ActualHeight + 64));
-        var region = new PixelRect((int)Math.Floor(first.X), (int)Math.Floor(first.Y),
-            (int)Math.Ceiling(last.X - first.X), (int)Math.Ceiling(last.Y - first.Y));
+        var dpi = VisualTreeHelper.GetDpi(owner);
+        var marginX = (int)Math.Ceiling(64 * dpi.DpiScaleX);
+        var marginY = (int)Math.Ceiling(64 * dpi.DpiScaleY);
+        var region = new PixelRect(pixels.X - marginX, pixels.Y - marginY,
+            pixels.Width + 2 * marginX, pixels.Height + 2 * marginY);
         if (owner.PrimaryDisplaySession is { IsAvailable: true } session) region = session.ClipToPrimaryBounds(region);
         return GlassBackdropScene.Capture(region);
     }
@@ -717,18 +1110,20 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
 
     private void SetTimerInterval(TimeSpan interval)
     {
-        _refreshInterval = interval;
+        _refreshInterval = _handoffStarted != 0 ? GlassBackgroundLayer.LiveFrameInterval : interval;
         // A 16 ms DispatcherTimer can wake only every second display frame because
         // its Windows timer is rounded. Live updates follow WPF's render clock;
         // the timer only wakes idle modes or recovers a temporarily silent clock.
         var watchdog = interval <= GlassBackgroundLayer.LiveFrameInterval ? TimeSpan.FromMilliseconds(100) : interval;
         if (_timer.Interval != watchdog) _timer.Interval = watchdog;
         UpdateRenderClock();
+        if (!_performanceSleeping && IsLoaded && IsVisible && IsBackdropActive?.Invoke() != false) _timer.Start();
     }
 
     private void UpdateRenderClock()
     {
-        var active = IsLoaded && IsVisible && _refreshInterval <= GlassBackgroundLayer.LiveFrameInterval;
+        var active = !_performanceSleeping && IsLoaded && IsVisible && IsBackdropActive?.Invoke() != false
+            && _refreshInterval <= GlassBackgroundLayer.LiveFrameInterval;
         if (active && !_renderClockAttached)
         {
             _lastRenderingTime = TimeSpan.MinValue; _lastRenderingTicks = 0;
@@ -739,14 +1134,15 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
 
     private void StopRenderClock()
     {
-        if (!_renderClockAttached) return;
-        CompositionTarget.Rendering -= OnRenderingFrame; _renderClockAttached = false;
+        if (_renderClockAttached) CompositionTarget.Rendering -= OnRenderingFrame;
+        _renderClockAttached = false;
         _renderFrameOperation?.Abort(); _renderFrameOperation = null; _renderFrameQueued = false;
         _lastRenderingTicks = 0;
     }
 
     private void OnRenderingFrame(object? sender, EventArgs e)
     {
+        if (_performanceSleeping) return;
         if (e is RenderingEventArgs rendering)
         {
             if (rendering.RenderingTime == _lastRenderingTime) return;
@@ -778,6 +1174,7 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
 
     private void OnWatchdogFrame(object? sender, EventArgs e)
     {
+        if (_performanceSleeping) return;
         if (_renderClockAttached && _lastRenderingTicks != 0
             && Stopwatch.GetElapsedTime(_lastRenderingTicks) < TimeSpan.FromMilliseconds(100)) return;
         OnFrame(sender, e);

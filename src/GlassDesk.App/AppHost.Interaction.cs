@@ -87,7 +87,8 @@ internal sealed partial class AppHost
             _dock.SuppressPassiveTriggersWhenFullscreen = display.SuppressTriggersWhenFullscreen;
     }
 
-    private bool CanExecuteInteraction(InputAction action) => _interaction?.CanExecute(action) == true;
+    private bool CanExecuteInteraction(InputAction action) => _interaction?.CanExecute(action) == true
+        && !_performancePointerInputSuppressed;
 
     private void ExecuteInteraction(InputAction action)
     {
@@ -130,15 +131,26 @@ internal sealed partial class AppHost
     }
 
     private void OnSystemDisplaySettingsChanged(object? sender, EventArgs e)
-    { GlassDesk.UI.BackdropRecovery.RetryBackground("DisplaySettingsChanged"); QueueDisplayRefresh(); }
+    { if (_performance?.State != PerformanceState.Sleeping) GlassDesk.UI.BackdropRecovery.RetryBackground("DisplaySettingsChanged"); QueueDisplayRefresh(); }
     private void OnBackgroundPowerModeChanged(object sender, PowerModeChangedEventArgs e)
-    { if (e.Mode == PowerModes.Resume) GlassDesk.UI.BackdropRecovery.RetryBackground("PowerResume"); }
+    {
+        if (e.Mode == PowerModes.Suspend) SetPerformanceSessionSuspended(true);
+        else if (e.Mode == PowerModes.Resume) SetPerformanceSessionSuspended(false);
+    }
     private void OnBackgroundSessionSwitch(object sender, SessionSwitchEventArgs e)
-    { if (e.Reason is SessionSwitchReason.SessionUnlock or SessionSwitchReason.RemoteConnect or SessionSwitchReason.ConsoleConnect)
-        GlassDesk.UI.BackdropRecovery.RetryBackground("SessionResume"); }
+    {
+        if (e.Reason is SessionSwitchReason.SessionLock or SessionSwitchReason.RemoteDisconnect or SessionSwitchReason.ConsoleDisconnect)
+            SetPerformanceSessionSuspended(true);
+        else if (e.Reason is SessionSwitchReason.SessionUnlock or SessionSwitchReason.RemoteConnect or SessionSwitchReason.ConsoleConnect)
+            SetPerformanceSessionSuspended(false);
+    }
 
     private void OnSystemUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
     {
+        // Generation invalidation does not start capture. Sleeping feeds remain
+        // stopped and reject their previous wallpaper on the next explicit wake.
+        if (e.Category == UserPreferenceCategory.Desktop)
+            GlassDesk.UI.BackdropRecovery.RetryBackground("DesktopSettingsChanged");
         if (e.Category is UserPreferenceCategory.General or UserPreferenceCategory.VisualStyle or UserPreferenceCategory.Window)
             QueueDisplayRefresh();
     }
@@ -162,11 +174,12 @@ internal sealed partial class AppHost
                 _launcher?.StopForPrimaryDisplayChange();
                 foreach (Window window in _application.Windows)
                     if (window is GlassWindow glassWindow) glassWindow.Hide();
-                GlassDesk.UI.BackdropRecovery.RetryBackground("PrimaryDisplayRebind");
+                if (_performance?.State != PerformanceState.Sleeping) GlassDesk.UI.BackdropRecovery.RetryBackground("PrimaryDisplayRebind");
                 if (!primary.TryRebindPrimary(currentPrimary)) return;
                 rebound = true;
             }
             _interaction?.RefreshDisplays();
+            _performanceFullscreen?.Refresh();
             _dock?.RefreshDisplayPlacement();
             _launcher?.RefreshDisplayPlacement();
             if (_settings?.IsVisible == true) _settings.PositionOnPrimary();

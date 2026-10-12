@@ -27,6 +27,10 @@ internal static partial class Program
     private static int Main(string[] args)
     {
         if (GlassDesk.UI.BackdropCaptureWorker.RunIfRequested(args, out var workerExit)) return workerExit;
+        if (args.Contains("--appearance-customization")) return VerifyAppearanceCustomization(args);
+        if (args.Contains("--dock-builtin-entries")) return VerifyDockBuiltinEntries(args);
+        if (args.Contains("--fullscreen-fixture")) return RunPerformanceFullscreenFixture(args);
+        if (args.Contains("--full-host-performance")) return VerifyFullHostPerformance(args);
         if (args.Contains("--full-host-input")) return VerifyFullHostInput(args);
         var report = Argument(args, "--report") ?? Path.Combine(Environment.CurrentDirectory, "phase5-wpf.json");
         var supplied = Argument(args, "--data-dir");
@@ -495,7 +499,9 @@ internal static partial class Program
     private static void Pump(TimeSpan duration)
     {
         var frame = new DispatcherFrame();
-        var timer = new DispatcherTimer { Interval = duration };
+        // This timer bounds the test phase; it must still fire when production
+        // rendering keeps lower dispatcher priorities busy.
+        var timer = new DispatcherTimer(DispatcherPriority.Send) { Interval = duration };
         timer.Tick += (_, _) => { timer.Stop(); frame.Continue = false; };
         timer.Start();
         Dispatcher.PushFrame(frame);

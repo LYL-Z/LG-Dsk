@@ -48,7 +48,8 @@ public class DockPersistenceTests
                 }
 
                 Assert.Empty(data.Layouts.Dock.PinnedItemIds);
-                Assert.Equal(1, window.TileCount);
+                Assert.Equal(0, window.TileCount);
+                Assert.IsType<Button>(window.FindName("LauncherButton"));
                 Assert.Contains("未能保存", Assert.IsType<TextBlock>(window.FindName("StatusText")).Text);
             }
             finally
@@ -94,7 +95,8 @@ public class DockPersistenceTests
                 }
 
                 Assert.Equal([entry.Id, "missing-entry"], data.Layouts.Dock.PinnedItemIds);
-                Assert.Equal(2, window.TileCount);
+                Assert.Equal(1, window.TileCount);
+                Assert.IsType<Button>(window.FindName("LauncherButton"));
             }
             finally
             {
@@ -142,7 +144,8 @@ public class DockPersistenceTests
                 }
 
                 Assert.Contains(entry.Id, data.Layouts.Dock.PinnedItemIds);
-                Assert.Equal(2, window.TileCount);
+                Assert.Equal(1, window.TileCount);
+                Assert.IsType<Button>(window.FindName("LauncherButton"));
                 Assert.Contains("未能保存", Assert.IsType<TextBlock>(window.FindName("StatusText")).Text);
             }
             finally

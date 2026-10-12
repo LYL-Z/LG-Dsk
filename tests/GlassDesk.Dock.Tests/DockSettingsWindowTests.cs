@@ -1,8 +1,10 @@
 using System.IO;
+using System.Reflection;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using GlassDesk.Core.Models.Settings;
 using GlassDesk.Core.Storage;
+using GlassDesk.Platform.Installation;
 using GlassDesk.Settings;
 using GlassDesk.UI.Settings;
 
@@ -10,6 +12,47 @@ namespace GlassDesk.Dock.Tests;
 
 public class DockSettingsWindowTests
 {
+    [Fact]
+    public void RefreshInstallationStatusReplacesStaleMismatchAndEnablesUninstall()
+    {
+        StaTest.Run(() =>
+        {
+            var window = new SettingsWindow();
+            try
+            {
+                window.AttachInstallation(new InstallationInfo(
+                    InstallationState.RegistrationMismatch,
+                    Error: "旧的登记状态"));
+
+                var calls = 0;
+                var refreshed = new InstallationInfo(
+                    InstallationState.VerifiedInstalled,
+                    @"D:\GlassDesk",
+                    @"D:\GlassDesk\unins000.exe");
+                var refreshMethod = typeof(SettingsWindow).GetMethod(
+                    "RefreshInstallationStatus",
+                    BindingFlags.Instance | BindingFlags.Public,
+                    [typeof(Func<InstallationInfo>)]);
+                Assert.NotNull(refreshMethod);
+
+                refreshMethod.Invoke(window, [new Func<InstallationInfo>(() =>
+                {
+                    calls++;
+                    return refreshed;
+                })]);
+
+                Assert.Equal(1, calls);
+                Assert.True(Assert.IsType<Button>(window.FindName("UninstallButton")).IsEnabled);
+                Assert.Contains(@"D:\GlassDesk\unins000.exe",
+                    Assert.IsType<TextBlock>(window.FindName("InstallationStatus")).Text);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
     [Fact]
     public void DockSizeControlsAreRemovedAndLegacyMetricsAreLockedOnTheNextChange()
     {

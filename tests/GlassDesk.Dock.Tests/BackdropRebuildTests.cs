@@ -18,9 +18,13 @@ public sealed class BackdropRebuildTests
             if (Interlocked.Increment(ref attempts) == 1) { first.Region = region; return first; }
             Assert.True(first.Disposed); return new Source(192) { Region = region };
         });
-        bool Read(byte expected) => feed.TryRead(new PixelRect(0, 0, 2, 2), 2, 2, out var frame) && frame!.Pixels.Span[0] == expected;
+        bool Read(byte expected)
+        {
+            if(!feed.TryRead(new PixelRect(0,0,2,2),2,2,out var frame)) return false;
+            using(frame) return frame!.Pixels.Span[0]==expected;
+        }
         Assert.True(SpinWait.SpinUntil(() => Read(64), TimeSpan.FromSeconds(3)));
-        signal.GetMethod("RetryBackground")!.Invoke(null, null);
+        signal.GetMethod("RetryBackground",Type.EmptyTypes)!.Invoke(null, null);
         Assert.True(SpinWait.SpinUntil(() => Read(192), TimeSpan.FromSeconds(3)));
         Assert.Equal(2, attempts);
     }

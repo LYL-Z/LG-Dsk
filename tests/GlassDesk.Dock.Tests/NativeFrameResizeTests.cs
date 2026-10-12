@@ -3,6 +3,20 @@ namespace GlassDesk.Dock.Tests;
 public sealed class NativeFrameResizeTests
 {
     [Fact]
+    public void ResizeIntoPreservesLegacyPixelsWithoutAllocatingAFrameArray()
+    {
+        using var reference=new NativeFrameResize();using var resize=new NativeFrameResize();
+        var source=new byte[91*57*4];new Random(1781).NextBytes(source);
+        var frame=new CapturePixels(91,57,source);var crop=new PixelBounds(7,5,87,52);
+        var output=new byte[39*27*4];
+        resize.ResizeInto(frame,39,27,crop,output);
+        Assert.Equal(reference.Resize(frame,39,27,crop),output);
+        var allocated=GC.GetAllocatedBytesForCurrentThread();
+        for(var n=0;n<10;n++) {source[n]++;resize.ResizeInto(frame,39,27,crop,output);}
+        Assert.InRange(GC.GetAllocatedBytesForCurrentThread()-allocated,0,1024);
+        Assert.Equal(reference.Resize(frame,39,27,crop),output);
+    }
+    [Fact]
     public void IdenticalNativePixelsReuseTheImmutableResizedFrame()
     {
         using var resize = new NativeFrameResize();

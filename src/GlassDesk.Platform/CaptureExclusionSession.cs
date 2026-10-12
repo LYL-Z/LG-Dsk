@@ -63,6 +63,23 @@ public sealed class CaptureExclusionSession : IDisposable
         return enumerated && safe;
     }
 
+    // Before revealing a hidden window, no affinity change is necessary. Reject
+    // overlapping product windows/popups rather than sampling our own UI.
+    internal static bool CanCaptureBeforeReveal(PixelRect region, nint emptyOwner = 0)
+    {
+        var safe = true;
+        var enumerated = EnumWindows((handle, _) =>
+        {
+            if (GetWindowThreadProcessId(handle, out var process) == 0) { safe = false; return false; }
+            if (process != Environment.ProcessId || !IsWindowVisible(handle) || handle == emptyOwner) return true;
+            if (!GetWindowRect(handle, out var bounds)) { safe = false; return false; }
+            if (bounds.Left < region.Right && bounds.Right > region.X && bounds.Top < region.Bottom && bounds.Bottom > region.Y)
+            { safe = false; return false; }
+            return true;
+        }, 0);
+        return enumerated && safe;
+    }
+
     public static void Forget(nint handle) { lock (Gate) Windows.Remove(handle); }
     public void Dispose()
     {

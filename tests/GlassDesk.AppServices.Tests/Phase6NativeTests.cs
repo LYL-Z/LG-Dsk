@@ -18,7 +18,7 @@ public sealed class Phase6NativeTests
     {
         var type = Native("GlassDesk.Platform.Input.MouseSideButtonHook");
         int calls = 0;
-        using var hook = (IDisposable)Activator.CreateInstance(type, (Func<int,bool>)(button => { calls++; return button == 1; }))!;
+        using var hook = (IDisposable)Activator.CreateInstance(type, [(Func<int,bool>)(button => { calls++; return button == 1; }), null])!;
         var method = type.GetMethod("HandleButton", BindingFlags.NonPublic | BindingFlags.Instance)!;
         bool Handle(int button, bool down, bool injected) => (bool)method.Invoke(hook,[button,down,injected])!;
         Assert.False(Handle(1,true,true)); Assert.Equal(0,calls);
@@ -31,7 +31,7 @@ public sealed class Phase6NativeTests
     [Fact] public void CallbackExceptionDoesNotConsumeButtonOrEscape()
     {
         var type = Native("GlassDesk.Platform.Input.MouseSideButtonHook");
-        using var hook = (IDisposable)Activator.CreateInstance(type,(Func<int,bool>)(_ => throw new InvalidOperationException()))!;
+        using var hook = (IDisposable)Activator.CreateInstance(type, [(Func<int,bool>)(_ => throw new InvalidOperationException()), null])!;
         var method = type.GetMethod("HandleButton",BindingFlags.NonPublic | BindingFlags.Instance)!;
         Assert.False((bool)method.Invoke(hook,[1,true,false])!);
         Assert.False((bool)method.Invoke(hook,[1,false,false])!);

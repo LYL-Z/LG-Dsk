@@ -17,6 +17,8 @@ internal static class CaptureProcessFamily
         if (!PendingRetirement.IsEmpty)
             throw new InvalidOperationException("Previous capture worker exit is still pending; new ownership is disabled.");
     }
+    internal static int[] WorkerProcesses => Workers.Keys.Order().ToArray();
+    internal static int PendingRetirementCount => PendingRetirement.Count;
     internal static int[] KnownProcesses => Workers.Keys.Concat(Volatile.Read(ref _otherProductProcesses))
         .Append(Environment.ProcessId).Distinct().Order().ToArray();
     internal static int[] Snapshot()

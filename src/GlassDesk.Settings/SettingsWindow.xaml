@@ -165,6 +165,13 @@
             <StackPanel>
               <TextBlock x:Name="AppearanceSectionHeading" FontSize="16" FontWeight="SemiBold" Text="外观"
                          Foreground="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+              <TextBlock Margin="0,12,0,4" Text="玻璃效果" />
+              <ComboBox x:Name="AppearanceMaterialCombo" AutomationProperties.Name="玻璃效果"
+                        SelectionChanged="OnAppearanceControlChanged">
+                <ComboBoxItem Content="液态玻璃" />
+                <ComboBoxItem Content="磨砂玻璃" />
+              </ComboBox>
+              <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" Text="液态玻璃保留折射与边缘光泽；磨砂玻璃柔化背景，不产生折射。切换同时应用到 Dock 和启动台。" />
               <TextBlock Margin="0,12,0,4" Text="Dock 透明度" />
               <DockPanel>
                 <TextBlock x:Name="DockTransparencyValue" DockPanel.Dock="Right" Width="48" TextAlignment="Right" />
@@ -187,7 +194,7 @@
                 <TextBlock DockPanel.Dock="Left" Text="不透明" />
                 <TextBlock Text="透明" TextAlignment="Right" />
               </DockPanel>
-              <TextBlock Margin="0,6,0,0" Text="分别调节 Dock 和启动台的液态玻璃透明度。默认 Dock 90%、启动台 20%。" TextWrapping="Wrap" />
+              <TextBlock Margin="0,6,0,0" Text="分别调节 Dock 和启动台的玻璃透明度。默认 Dock 90%、启动台 20%。" TextWrapping="Wrap" />
               <CheckBox x:Name="ReduceMotionCheck" Margin="0,10,0,0" Content="减少动画"
                         AutomationProperties.Name="减少动画" Checked="OnAppearanceControlChanged" Unchecked="OnAppearanceControlChanged" />
               <TextBlock x:Name="AppearanceStatus" Margin="0,8,0,12" TextWrapping="Wrap" AutomationProperties.Name="外观设置状态" />
@@ -195,13 +202,28 @@
               <TextBlock x:Name="DockSectionHeading" FontSize="16" FontWeight="SemiBold" Text="Dock 设置"
                          Foreground="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
               <TextBlock Margin="0,10,0,4" TextWrapping="Wrap"
-                         Text="液态玻璃外观已统一应用。图标保持 48 DIP、间距 8 DIP、悬停放大 1.15×；下方滑块只调整 Dock 外框长度。" />
+                         Text="整体大小同时调整图标、间距和栏高度。外框长度可单独调节，悬停放大效果保持不变。" />
+              <TextBlock Margin="0,12,0,4" Text="左侧固定图标" />
+              <CheckBox x:Name="ShowLauncherEntryCheckBox" Content="显示启动台" Margin="0,4"
+                        AutomationProperties.Name="Dock 显示启动台" Checked="OnDockControlChanged" Unchecked="OnDockControlChanged" />
+              <CheckBox x:Name="ShowThisPcEntryCheckBox" Content="显示此电脑" Margin="0,4"
+                        AutomationProperties.Name="Dock 显示此电脑" Checked="OnDockControlChanged" Unchecked="OnDockControlChanged" />
+              <CheckBox x:Name="ShowDesktopIconsEntryCheckBox" Content="显示切换桌面图标" Margin="0,4"
+                        AutomationProperties.Name="Dock 显示切换桌面图标" Checked="OnDockControlChanged" Unchecked="OnDockControlChanged" />
+              <TextBlock Margin="0,4,0,10" TextWrapping="Wrap" Text="按启动台、此电脑、切换桌面图标的顺序固定在左侧。切换桌面图标用于显示或隐藏桌面上的图标。" />
+              <TextBlock Margin="0,12,0,4" Text="整体大小" />
+              <Slider x:Name="DockScaleSlider" Minimum="0.6666666666666666" Maximum="1.5"
+                      SmallChange="0.05" LargeChange="0.1" IsMoveToPointEnabled="True"
+                      AutomationProperties.Name="Dock 整体大小" ValueChanged="OnDockControlChanged" />
+              <TextBlock x:Name="DockScaleReadout" Margin="0,2,0,6" FontSize="11" AutomationProperties.Name="Dock 整体大小当前值" />
               <TextBlock Margin="0,12,0,4" Text="外框长度（DIP）" />
               <Slider x:Name="DockFrameLengthSlider" Minimum="180" Maximum="180" TickFrequency="8"
                       AutomationProperties.Name="Dock 外框长度（DIP）"
                       ValueChanged="OnDockControlChanged" />
               <TextBlock x:Name="DockFrameLengthReadout" Margin="0,2,0,6" FontSize="11"
                          AutomationProperties.Name="Dock 外框长度当前值" />
+              <Button Content="外框长度随内容自动调整" HorizontalAlignment="Left" Margin="0,2,0,4"
+                      AutomationProperties.Name="Dock 外框长度自动调整" Click="OnDockAutoLengthClick" />
               <TextBlock Margin="0,12,0,4" Text="位置"
                          Foreground="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
               <ComboBox x:Name="DockPlacementCombo" AutomationProperties.Name="Dock 位置"
@@ -255,6 +277,15 @@
               </UniformGrid>
               <TextBlock x:Name="InteractionSettingsStatus" Margin="0,8,0,14" TextWrapping="Wrap"
                          AutomationProperties.Name="快捷操作设置状态" />
+              <Separator Margin="0,4,0,14" />
+              <TextBlock x:Name="PerformanceSectionHeading" FontSize="16" FontWeight="SemiBold" Text="性能"
+                         Foreground="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+              <CheckBox x:Name="AutoSuspendWhenFullscreenCheck" Margin="0,10,0,8" Content="全屏应用运行时自动休眠"
+                        AutomationProperties.Name="全屏应用运行时自动休眠" IsEnabled="False"
+                        Checked="OnPerformanceControlChanged" Unchecked="OnPerformanceControlChanged" />
+              <TextBlock TextWrapping="Wrap" Text="游戏和视频全屏时收起 Dock 并暂停背景处理。可用键盘快捷键或托盘临时打开启动台；窗口化游戏可在托盘手动启用游戏休眠。" />
+              <TextBlock x:Name="PerformanceSettingsStatus" Margin="0,8,0,14" TextWrapping="Wrap"
+                         AutomationProperties.Name="性能设置状态" />
               <Separator Margin="0,4,0,14" />
               <TextBlock x:Name="DesktopSectionHeading" FontSize="16" FontWeight="SemiBold" Text="桌面"
                          Foreground="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />

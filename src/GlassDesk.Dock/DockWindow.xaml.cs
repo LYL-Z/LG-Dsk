@@ -41,6 +41,8 @@ public partial class DockWindow : GlassWindow
     private AppServiceHost? _services;
     private DockSettingsHost? _dockSettings;
     private Action<PixelRect?>? _toggleLauncher;
+    /// <summary>宿主提供与桌面图标快捷键相同的动作，不依赖快捷键是否启用。</summary>
+    public Action? ToggleDesktopIcons { get; set; }
     private System.Windows.Threading.DispatcherTimer? _failureNoticeTimer;
     private readonly DockTileStrip _tileStrip;
 
@@ -62,7 +64,7 @@ public partial class DockWindow : GlassWindow
     public void SetLauncherContainerState(bool expanded)
     {
         _launcherContainerActive = expanded;
-        if (expanded && _restingRect.Width > 0)
+        if (expanded && !_performanceSleepRequested && _restingRect.Width > 0)
         {
             _autoHide?.ForceShown(DateTime.UtcNow);
             _slideOffsetPixels = 0;
@@ -423,7 +425,7 @@ public partial class DockWindow : GlassWindow
     protected override double ResolveCornerRadius(AppearanceSettings appearance)
     {
         ArgumentNullException.ThrowIfNull(appearance);
-        return Math.Max(40, appearance.DockCornerRadius);
+        return Math.Max(40, appearance.DockCornerRadius) * DockScale;
     }
 
     // ---- 磁贴 ----
@@ -438,6 +440,7 @@ public partial class DockWindow : GlassWindow
     /// </remarks>
     public void RefreshTiles()
     {
+        if (_performanceSleepRequested) { _tilesDirty = true; return; }
         var settings = Settings;
         var tracker = _services?.Running;
         var dotBrush = ThemeService.Current?.Palette.ForegroundBrush;
@@ -445,7 +448,7 @@ public partial class DockWindow : GlassWindow
         _models.Clear();
 
         // 固定项依赖应用服务；未附加宿主时（构造后立刻查询的场合）只少固定项，
-        // 三个内置入口是常驻的，任何时候都必须在（测试正是这么锁的）。
+        // 内置入口独立于固定项，由 Dock 设置控制可见性。
         if (_services is not null)
         {
             foreach (var id in _services.Layouts.Dock.PinnedItemIds)
@@ -483,8 +486,8 @@ public partial class DockWindow : GlassWindow
             ToolTipText = tooltip,
             Icon = LoadTileIcon(entry),
             DotBrush = dotBrush,
-            IconSize = DockSettings.FixedIconSize,
-            TileMargin = new Thickness(DockSettings.FixedIconSpacing / 2, 0, DockSettings.FixedIconSpacing / 2, 0),
+            IconSize = DockSettings.FixedIconSize * DockScale,
+            TileMargin = new Thickness(DockSettings.FixedIconSpacing * DockScale / 2, 0, DockSettings.FixedIconSpacing * DockScale / 2, 0),
             IsMissing = entry.IsTargetMissing,
             RunningVisibility = tracker.IsRunning(entry)
                 ? Visibility.Visible
@@ -496,36 +499,62 @@ public partial class DockWindow : GlassWindow
     /// 把尺寸与滚动封顶交给磁贴条。
     /// </summary>
     /// <remarks>
-    /// 封顶宽度 = 目标显示器工作区的 DIP 宽度 − 面板内边距、两个固定入口与放大余量。
+    /// 封顶宽度 = 目标显示器工作区的 DIP 宽度 − 面板内边距、已启用入口与放大余量。
     /// 固定项超出时磁贴条自身横向滚动（修订计划第 6 条），窗口永远不出工作区。
     /// </remarks>
     private void ApplyStripMetrics()
     {
         var settings = Settings;
         var display = CurrentPrimaryDisplay;
+        var scale = DockScale;
+        DockContentLayer.Margin = new Thickness(10 * scale, 8 * scale, 10 * scale, 8 * scale);
+        if ((LauncherButton.Visibility == Visibility.Visible) != settings.ShowLauncherEntry
+            || (ThisPcButton.Visibility == Visibility.Visible) != settings.ShowThisPcEntry
+            || (DesktopIconsButton.Visibility == Visibility.Visible) != settings.ShowDesktopIconsEntry)
+            ResetEntryHover();
+        LauncherButton.Visibility = settings.ShowLauncherEntry ? Visibility.Visible : Visibility.Collapsed;
+        ThisPcButton.Visibility = settings.ShowThisPcEntry ? Visibility.Visible : Visibility.Collapsed;
+        DesktopIconsButton.Visibility = settings.ShowDesktopIconsEntry ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var button in new[] { LauncherButton, ThisPcButton, DesktopIconsButton })
+        {
+            button.Width = 48 * scale;
+            button.Height = 64 * scale;
+            button.Margin = new Thickness(0, 0, 8 * scale, 0);
+        }
+        LaunchpadTile.Width = LaunchpadTile.Height = ThisPcTile.Width = ThisPcTile.Height
+            = DesktopIconsTile.Width = DesktopIconsTile.Height = 48 * scale;
+        LaunchpadTile.CornerRadius = new CornerRadius(16 * scale);
+        PanelCornerRadius = new CornerRadius(40 * scale);
 
         var contentLimit = display is null
             ? 0.0
-            : display.ToDips((int)display.WorkArea.Width) - 172;
+            : Math.Max(1, display.ToDips((int)display.WorkArea.Width) - 32 - (28 + BuiltinEntryWidthDip) * scale);
 
         if (settings.FrameLengthDip > 0)
-            contentLimit = Math.Max(1, ResolveEffectiveFrameLengthDip(settings.FrameLengthDip, display) - 134);
+            contentLimit = Math.Max(1, ResolveEffectiveFrameLengthDip(settings.FrameLengthDip, display) - (22 + BuiltinEntryWidthDip) * scale);
 
         _tileStrip.SetMetrics(
-            DockSettings.FixedIconSize,
-            DockSettings.FixedIconSpacing,
+            DockSettings.FixedIconSize * scale,
+            DockSettings.FixedIconSpacing * scale,
             DockSettings.FixedMagnificationPeak,
-            8,
+            8 * scale,
             contentLimit);
     }
 
-    private static double ResolveEffectiveFrameLengthDip(double requested, DisplayInfo? display)
+    private double DockScale => double.IsFinite(Settings.SizeScale)
+        ? Math.Clamp(Settings.SizeScale, DockSettings.MinimumSizeScale, DockSettings.MaximumSizeScale) : 1;
+
+    private double BuiltinEntryWidthDip => 56 * ((Settings.ShowLauncherEntry ? 1 : 0)
+        + (Settings.ShowThisPcEntry ? 1 : 0) + (Settings.ShowDesktopIconsEntry ? 1 : 0));
+
+    private double ResolveEffectiveFrameLengthDip(double requested, DisplayInfo? display)
     {
+        var entryMinimum = Math.Max(DockSettings.MinimumFrameLengthDip, BuiltinEntryWidthDip + 22) * DockScale;
         if (display is null)
-            return Math.Clamp(requested, DockSettings.MinimumFrameLengthDip, DockSettings.MaximumFrameLengthDip);
+            return Math.Clamp(requested, entryMinimum, DockSettings.MaximumFrameLengthDip);
         var maxWidth = Math.Max(64, display.ToDips((int)display.WorkArea.Width) - 32);
         maxWidth = Math.Min(DockSettings.MaximumFrameLengthDip, maxWidth);
-        var minimum = Math.Min(DockSettings.MinimumFrameLengthDip, maxWidth);
+        var minimum = Math.Min(entryMinimum, maxWidth);
         return Math.Clamp(requested, minimum, maxWidth);
     }
 
@@ -1083,7 +1112,7 @@ public partial class DockWindow : GlassWindow
         // 调和在线程池上触发；圆点更新回到界面线程。只改可见性，不重建磁贴。
         _ = Dispatcher.BeginInvoke(() =>
         {
-            if (_services is null)
+            if (_services is null || _performanceSleepRequested)
             {
                 return;
             }
@@ -1143,7 +1172,8 @@ public partial class DockWindow : GlassWindow
     /// <summary>Read the launcher button's current physical screen rectangle after Dock layout.</summary>
     public PixelRect? GetLauncherButtonPixelBounds()
     {
-        if (!IsVisible || !IsOpticalSurfaceVisible
+        if (!Settings.ShowLauncherEntry || LauncherButton.Visibility != Visibility.Visible
+            || !IsVisible || !IsOpticalSurfaceVisible
             || LauncherButton.ActualWidth < 1 || LauncherButton.ActualHeight < 1) return null;
 
         try
@@ -1168,6 +1198,8 @@ public partial class DockWindow : GlassWindow
             ShowFailureNotice("此电脑没能打开。");
         }
     }
+
+    private void OnDesktopIconsButtonClick(object sender, RoutedEventArgs e) => ToggleDesktopIcons?.Invoke();
 
     // ---- 摆放 ----
 
@@ -1198,7 +1230,7 @@ public partial class DockWindow : GlassWindow
     {
         RebuildAutoHide();
         RefreshDisplayPlacement();
-        if (show) Show();
+        if (show && !_performanceSleepRequested) Show();
     }
 
     public void PositionOnDisplay()
@@ -1270,7 +1302,7 @@ public partial class DockWindow : GlassWindow
                 // throughout the slide and therefore remain consumable during motion.
                 var hiddenOffsetDip = _fullyHiddenOffsetPixels * SlideOutDirection() / scale;
                 GlassSurface.SetPanelShape(_slidePanelBoundsDip.Value, PanelCornerRadius.TopLeft);
-                GlassSurface.SetContainerTransitionBounds(slidePixels == 0 ? null :
+                GlassSurface.SetContainerTransitionBounds(
                     new Rect(0, Math.Min(0, hiddenOffsetDip), ActualWidth,
                         ActualHeight + Math.Abs(hiddenOffsetDip)));
                 SetSharedPanelClip(_slidePanelBoundsDip.Value, PanelCornerRadius.TopLeft);
@@ -1328,7 +1360,7 @@ public partial class DockWindow : GlassWindow
             _frameTimer.Tick += (_, _) => OnAutoHideFrame();
         }
 
-        _frameTimer.IsEnabled = true;
+        _frameTimer.IsEnabled = !_performanceSleepRequested;
         _frameTimer.Interval = TimeSpan.FromMilliseconds(100);
     }
 
@@ -1341,6 +1373,7 @@ public partial class DockWindow : GlassWindow
     /// </remarks>
     private void OnAutoHideFrame()
     {
+        if (_performanceSleepRequested) { AdvancePerformanceSleep(); return; }
         if (_autoHide is null || _services is null || _restingRect.Width == 0)
         {
             return;
@@ -1363,10 +1396,15 @@ public partial class DockWindow : GlassWindow
             ? (double)_fullyHiddenOffsetPixels
             : 0.0;
 
+        // Prepare a complete material before the first pixels slide back into view.
+        if (target == 0 && _backgroundCaptureSleeping) SetBackgroundCaptureSleeping(false);
+        else if (target == 0) PrepareConcealedReveal();
+
         if (ThemeService.Current?.AnimationsEnabled == false)
         {
             _slideOffsetPixels = target;
             ApplySlide(_restingRect,target);
+            NotifyPerformanceSurfaceVisibility();
             return;
         }
         if (Math.Abs(_slideOffsetPixels - target) > 0.5)
@@ -1387,10 +1425,11 @@ public partial class DockWindow : GlassWindow
         }
 
         if (_frameTimer is not null)
-            _frameTimer.Interval = suppressed || _autoHide.Suppressed
+            _frameTimer.Interval = !_backgroundCaptureSleeping && (suppressed || _autoHide.Suppressed)
                 || Math.Abs(_slideOffsetPixels - target) > 0.5
                 ? FrameInterval
                 : TimeSpan.FromMilliseconds(100);
+        NotifyPerformanceSurfaceVisibility();
     }
 
     private void UpdateAutoHideState(DateTime now, bool fullscreen, bool covered,
@@ -1452,6 +1491,7 @@ public partial class DockWindow : GlassWindow
     public void ToggleRevealLock()
     {
         _revealLocked = !_revealLocked;
+        if (_performanceSleepRequested) return;
         if (_frameTimer is not null)
         {
             _frameTimer.Interval = FrameInterval;
@@ -1476,6 +1516,8 @@ public partial class DockWindow : GlassWindow
 
     protected override void OnClosed(EventArgs e)
     {
+        _frameTimer?.Stop();
+        _failureNoticeTimer?.Stop();
         if (_dockSettings is not null)
         {
             _dockSettings.Changed -= OnDockSettingsChanged;

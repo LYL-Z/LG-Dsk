@@ -112,6 +112,7 @@ public partial class LauncherWindow
             _containerMotion = null;
             if (destination is { } finalBounds) SetPixelBounds(finalBounds);
             SetFinalVisualState();
+            PrepareRevealMaterial();
             Show();
             return;
         }
@@ -129,6 +130,7 @@ public partial class LauncherWindow
         PrepareTransitionBackdrop();
         LauncherContent.IsHitTestVisible = false;
         ApplyContainerTransformFrame(_containerMotion.CurrentFrame);
+        PrepareRevealMaterial();
         Show();
         BeginContainerTransform(1);
     }
@@ -324,6 +326,9 @@ public partial class LauncherWindow
 
     private void PrepareTransitionBackdrop() => GlassSurface.SetContainerTransitionBounds(new Rect(0, 0,
         _transformHostBounds.Width * _transformDipPerPixel, _transformHostBounds.Height * _transformDipPerPixel));
+
+    private void PrepareRevealMaterial() => GlassSurface.PrepareRevealMaterial(_transformHostBounds, _panelPixelBounds,
+        Math.Max(96, TransformDisplay?.Dpi ?? 96));
 
     private void RefreshContainerAnchor()
     {

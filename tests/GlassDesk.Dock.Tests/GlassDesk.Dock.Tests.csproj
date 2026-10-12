@@ -28,6 +28,7 @@
     <ProjectReference Include="..\..\src\GlassDesk.Settings\GlassDesk.Settings.csproj" />
     <ProjectReference Include="..\..\src\GlassDesk.Launcher\GlassDesk.Launcher.csproj" />
     <ProjectReference Include="../GlassDesk.CompatibilityProbe/GlassDesk.CompatibilityProbe.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../src/GlassDesk.App/GlassDesk.App.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>

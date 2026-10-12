@@ -13,6 +13,7 @@
     <UseWPF>true</UseWPF>
     <IsPackable>false</IsPackable>
     <AssemblyName>GlassDesk</AssemblyName>
+    <StartupObject>GlassDesk.App.Program</StartupObject>
     <ApplicationIcon>Assets\GlassDesk.ico</ApplicationIcon>
 
     <!-- 显示在文件属性对话框里，也用于外壳展示可执行文件。 -->
@@ -39,6 +40,10 @@
 
   <ItemGroup>
     <Resource Include="Assets/GlassDeskBrand.png" />
+    <Content Include="../../LICENSE" Link="LICENSE.txt"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../NOTICE" Link="NOTICE.txt"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Assets/GlassDesk.ico" Link="GlassDesk.ico"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../packaging/update-source.json" Link="update-source.json"

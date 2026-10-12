@@ -28,6 +28,8 @@ public sealed class GlassDeskSettings
 
     public DisplaySettings Display { get; set; } = new();
 
+    public PerformanceSettings Performance { get; set; } = new();
+
     public DesktopTaskbarSettings DesktopTaskbar { get; set; } = new();
 
     /// <summary>
@@ -42,6 +44,7 @@ public sealed class GlassDeskSettings
         Launcher ??= new LauncherSettings();
         Shortcuts ??= new ShortcutSettings();
         Display ??= new DisplaySettings();
+        Performance ??= new PerformanceSettings();
         DesktopTaskbar ??= new DesktopTaskbarSettings();
         Dock.AutoHide = false;
         Dock.EdgeRevealEnabled = false;
@@ -51,7 +54,10 @@ public sealed class GlassDeskSettings
 
         // Keep legacy enum values readable, but product settings have one appearance.
         Appearance.Theme = ThemeMode.Dark;
-        Appearance.GlassMaterial = GlassMaterialMode.AndroidLiquidGlass;
+        if (Appearance.GlassMaterial != GlassMaterialMode.FrostedGlass)
+            Appearance.GlassMaterial = GlassMaterialMode.AndroidLiquidGlass;
+        Dock.SizeScale = double.IsFinite(Dock.SizeScale)
+            ? Math.Clamp(Dock.SizeScale, DockSettings.MinimumSizeScale, DockSettings.MaximumSizeScale) : 1;
         // Settings now owns its opaque surface instead of changing every window.
         Appearance.ReduceTransparency = false;
         Appearance.DockGlassTransparency = double.IsFinite(Appearance.DockGlassTransparency)

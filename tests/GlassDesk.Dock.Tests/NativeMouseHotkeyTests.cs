@@ -8,6 +8,34 @@ namespace GlassDesk.Dock.Tests;
 public sealed class NativeMouseHotkeyTests
 {
     [Fact]
+    public void SleepingSideButtonPassesThroughWithoutPostingALauncherCommand()
+    {
+        StaTest.Run(() =>
+        {
+            using var source = new HwndSource(new HwndSourceParameters("GlassDesk-game-side-button-test"));
+            var sleeping = true;
+            using var registry = new NativeHotkeyRegistry(source.Handle, _ => !sleeping);
+            var received = 0;
+            source.AddHook((nint hwnd, int message, nint wParam, nint lParam, ref bool handled) =>
+            { if (message == 0x0312) received++; return 0; });
+            Assert.True(registry.TryRegister(44, new HotkeyChord(0, 5), out _));
+            Assert.False(registry.DispatchSideButton(1, 0));
+            Pump();
+            Assert.Equal(0, received);
+            sleeping = false;
+            Assert.True(registry.DispatchSideButton(1, 0));
+            Pump();
+            Assert.Equal(1, received);
+        });
+    }
+
+    private static void Pump()
+    {
+        var frame = new DispatcherFrame();
+        Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => frame.Continue = false));
+        Dispatcher.PushFrame(frame);
+    }
+    [Fact]
     public void WheelAccumulatesOneNotchAndPassesThroughWhenActionIsUnavailable()
     {
         StaTest.Run(() =>

@@ -36,10 +36,11 @@ internal sealed class AsyncBackdropProducer : IDisposable
             using var capture=createCapture();
             using var wait=createWait?.Invoke();
             long sequence=0,previousStart=0;
+            var signals=new[] {cancel.Token.WaitHandle,state.Changed};
             while(!cancel.IsCancellationRequested)
             {
                 var request=state.CurrentRequest;
-                if(request is null) { cancel.Token.WaitHandle.WaitOne(5); continue; }
+                if(request is null) { WaitHandle.WaitAny(signals); continue; }
                 var start=Stopwatch.GetTimestamp();
                 var frame=capture.Capture(request,++sequence);
                 var end=Stopwatch.GetTimestamp();
@@ -61,6 +62,7 @@ internal sealed class AsyncBackdropProducer : IDisposable
             }
         }
         catch(Exception error) { lock(gate) failure=error.Message; state.Dispose(); }
+        finally {state.RetireWaitHandle();}
     }
     internal bool Stop(TimeSpan timeout)
     {

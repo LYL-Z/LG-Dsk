@@ -13,6 +13,10 @@ public sealed class CaptureProtocolTests
     [InlineData("old-sequence")]
     [InlineData("old-generation")]
     [InlineData("old-source")]
+    [InlineData("wrong-protocol")]
+    [InlineData("wrong-width")]
+    [InlineData("wrong-crop")]
+    [InlineData("future-source")]
     public void BrokenWorkerIsBoundedAndRejectedWithoutLeakingTheChild(string fault)
     {
         var ctor = typeof(IsolatedDesktopSceneCapture).GetConstructor(BindingFlags.Instance | BindingFlags.NonPublic,

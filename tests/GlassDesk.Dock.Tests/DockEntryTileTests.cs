@@ -6,12 +6,12 @@ using GlassDesk.Platform.Shell;
 namespace GlassDesk.Dock.Tests;
 
 /// <summary>
-/// Dock 现在只显示启动台内置入口；显示桌面的底层最小化链路仍由平台断言覆盖。
+/// 内置入口独立于固定应用磁贴；显示桌面的底层最小化链路仍由平台断言覆盖。
 /// </summary>
 public class DockEntryTileTests
 {
     [Fact]
-    public void 无固定项时Dock只显示启动台入口()
+    public void 无固定项时内置入口独立于固定磁贴()
     {
         StaTest.Run(() =>
         {
@@ -20,8 +20,9 @@ public class DockEntryTileTests
             {
                 window.Show();
 
-                // 未附加宿主：没有固定项，Dock 保留启动台入口。
-                Assert.Equal(1, window.TileCount);
+                Assert.Equal(0, window.TileCount);
+                Assert.IsType<System.Windows.Controls.Button>(window.FindName("LauncherButton"));
+                Assert.IsType<System.Windows.Controls.Button>(window.FindName("ThisPcButton"));
             }
             finally
             {

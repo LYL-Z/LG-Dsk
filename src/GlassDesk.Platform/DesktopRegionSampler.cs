@@ -11,11 +11,23 @@ public sealed class DesktopRegionSampler : IDisposable
     private byte[]? _pixels;
 
     public bool TryCapture(PixelRect region, int width, int height, out byte[]? pixels)
+        => TryCapture(region, width, height, false, out pixels);
+
+    /// <summary>One-shot capture before Show, with no overlapping visible product HWND.</summary>
+    public bool TryCaptureBeforeReveal(PixelRect region, int width, int height, out byte[]? pixels)
+        => TryCapture(region, width, height, true, out pixels);
+
+    /// <summary>The caller has completely clipped this owner's panel out of its HWND.</summary>
+    public bool TryCaptureBeforeReveal(PixelRect region, int width, int height, nint emptyOwner, out byte[]? pixels)
+        => TryCapture(region, width, height, true, out pixels, emptyOwner);
+
+    private bool TryCapture(PixelRect region, int width, int height, bool beforeReveal, out byte[]? pixels, nint emptyOwner = 0)
     {
         pixels = null;
         if (region.Width <= 0 || region.Height <= 0 || (long)region.Width * region.Height > 32_000_000
             || width <= 0 || height <= 0 || width > 2048 || height > 2048 || (long)width * height > 500_000
-            || !CaptureExclusionSession.CanCaptureRegion(region)) return false;
+            || !(beforeReveal ? CaptureExclusionSession.CanCaptureBeforeReveal(region, emptyOwner)
+                : CaptureExclusionSession.CanCaptureRegion(region))) return false;
         var screen = GetDC(0);
         if (screen == 0) return false;
         try

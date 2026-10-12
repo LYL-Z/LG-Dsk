@@ -73,10 +73,10 @@ public sealed class LiquidGlassSurfaceTests
             surface.Measure(new Size(280, 140)); surface.Arrange(new Rect(0, 0, 280, 140));
             var bitmap = new RenderTargetBitmap(280, 140, 96, 96, PixelFormats.Pbgra32); bitmap.Render(surface);
             var pixels = new byte[280 * 140 * 4]; bitmap.CopyPixels(pixels, 280 * 4, 0);
-            Assert.InRange(pixels[(70 * 280 + 70) * 4 + 3], (byte)25, (byte)50);
+            Assert.Equal(255, pixels[(70 * 280 + 70) * 4 + 3]);
             // The old optical mask must not survive as a second container inside the
             // expanded shape, even while the fresh backdrop is not ready yet.
-            Assert.InRange(pixels[(70 * 280 + 140) * 4 + 3], (byte)25, (byte)50);
+            Assert.Equal(255, pixels[(70 * 280 + 140) * 4 + 3]);
             Assert.Equal(0, pixels[3]);
         });
     }
@@ -93,7 +93,7 @@ public sealed class LiquidGlassSurfaceTests
             var bitmap = new RenderTargetBitmap(280, 140, 96, 96, PixelFormats.Pbgra32);
             bitmap.Render(surface);
             var pixels = new byte[280 * 140 * 4]; bitmap.CopyPixels(pixels, 280 * 4, 0);
-            Assert.InRange(pixels[(70 * 280 + 140) * 4 + 3], (byte)25, (byte)50);
+            Assert.Equal(255, pixels[(70 * 280 + 140) * 4 + 3]);
             Assert.Equal(0, pixels[3]);
         });
     }
@@ -125,8 +125,9 @@ public sealed class LiquidGlassSurfaceTests
             surface.Measure(new Size(200,100)); surface.Arrange(new Rect(0,0,200,100));
             var image = new RenderTargetBitmap(200,100,96,96,PixelFormats.Pbgra32); image.Render(surface);
             var pixels = new byte[200*100*4]; image.CopyPixels(pixels,800,0);
-            Assert.InRange(pixels[(20*200+20)*4+3],0,50);
-            Assert.InRange(pixels[(50*200+100)*4+3],0,30);
+            Assert.Equal(255, pixels[(20*200+20)*4+3]);
+            Assert.Equal(255, pixels[(50*200+100)*4+3]);
+            Assert.True(pixels[(20*200+20)*4] < 230, "The previous white container must not persist inside the new material.");
         });
     }
 
@@ -157,7 +158,8 @@ public sealed class LiquidGlassSurfaceTests
             var bitmap = new RenderTargetBitmap(300, 180, 96, 96, PixelFormats.Pbgra32);
             bitmap.Render(surface);
             var actual = new byte[pixels.Length]; bitmap.CopyPixels(actual, 1200, 0);
-            Assert.InRange(actual[(90 * 300 + 169) * 4 + 3], (byte)25, (byte)50);
+            Assert.Equal(255, actual[(90 * 300 + 169) * 4 + 3]);
+            Assert.True(actual[(90 * 300 + 169) * 4] < 230, "The previous white rim must not appear in the new panel's interior.");
         });
     }
 
@@ -182,7 +184,7 @@ public sealed class LiquidGlassSurfaceTests
     }
 
     [Fact]
-    public void MissingBackdropKeepsCenterClearAndCornersTransparent()
+    public void MissingBackdropKeepsCompleteMaterialAndCornersTransparent()
     {
         StaTest.Run(() =>
         {
@@ -193,7 +195,7 @@ public sealed class LiquidGlassSurfaceTests
             rendered.Render(surface);
             var pixels = new byte[320 * 80 * 4];
             rendered.CopyPixels(pixels, 320 * 4, 0);
-            Assert.InRange(pixels[(40 * 320 + 160) * 4 + 3], (byte)1, (byte)42);
+            Assert.Equal(255, pixels[(40 * 320 + 160) * 4 + 3]);
             Assert.Equal(0, pixels[3]);
         });
     }

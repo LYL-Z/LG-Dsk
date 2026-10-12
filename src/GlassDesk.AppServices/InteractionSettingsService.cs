@@ -42,7 +42,10 @@ public sealed class NativeHotkeyRegistry(nint hwnd, Func<int, bool>? canDispatch
         var chord = new HotkeyChord(modifiers, button == 1 ? 5u : 6u);
         foreach (var binding in mouseBindings)
             if (binding.Value == chord)
+            {
+                if (canDispatchWheel?.Invoke(binding.Key) == false) return false;
                 return PostMessage(hwnd, 0x0312, binding.Key, (nint)((chord.VirtualKey << 16) | modifiers));
+            }
         return false;
     }
 

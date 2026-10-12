@@ -9,7 +9,7 @@ namespace GlassDesk.UI;
 public static class BackdropCaptureWorker
 {
     internal const int ProtocolMagic = 0x47444333;
-    internal const int ProtocolVersion = 3;
+    internal const int ProtocolVersion = 4;
     public static bool RunIfRequested(string[] arguments, out int exitCode)
     {
         exitCode = 0;
@@ -40,7 +40,10 @@ public static class BackdropCaptureWorker
             var region = new ScreenRect(input.ReadInt32(), input.ReadInt32(), input.ReadInt32(), input.ReadInt32());
             if (region.Width <= 0 || region.Height <= 0 || (long)region.Width * region.Height > 32_000_000)
                 throw new InvalidDataException("Invalid capture extent.");
-            using var pixels = SharedCapturePixels.Open(input.ReadString(), checked(region.Width * region.Height * 4));
+            using var pixels = SharedCapturePixels.Open(input.ReadString(), input.ReadInt32());
+            using var resize=new NativeFrameResize();
+            byte[]? sampled=null;
+            CapturePixels? cachedNative=null;long cachedGeneration=0;
             var excluded = ReadFamily(input, parentId);
             using IDesktopSceneCapture capture = provider switch
             {
@@ -48,7 +51,7 @@ public static class BackdropCaptureWorker
                 1 => new DocumentedDesktopSceneCapture(region, excludedProcesses: () => excluded),
                 _ => new WallpaperSceneCapture(region)
             };
-            output.Write((byte)1); output.Write(capture.CarrierHandle.ToInt64()); output.Flush();
+            output.Write((byte)1);output.Write(ProtocolVersion); output.Write(capture.CarrierHandle.ToInt64()); output.Flush();
             while (!parent.HasExited)
             {
                 var command = input.ReadByte();
@@ -58,27 +61,42 @@ public static class BackdropCaptureWorker
                 excluded = ReadFamily(input, parentId);
                 if (command == 3)
                 {
-                    output.Write(capture.UpdateExclusions() ? (byte)1 : (byte)0);
+                    var changed=capture.UpdateExclusions();if(changed) cachedNative=null;
+                    output.Write(changed ? (byte)1 : (byte)0);
                     output.Write(sequence); output.Write(generation); output.Write(capture.SceneRevision); output.Flush(); continue;
                 }
                 if (command == 2)
                 {
-                    capture.ReleaseReadbackBuffers(); output.Write((byte)0);
+                    capture.ReleaseReadbackBuffers();resize.Dispose();sampled=null;cachedNative=null; output.Write((byte)0);
                     output.Write(sequence); output.Write(generation); output.Write(capture.SceneRevision); output.Flush(); continue;
                 }
-                if (command != 1) throw new InvalidDataException("Unknown capture command.");
+                if (command is not (1 or 4)) throw new InvalidDataException("Unknown capture command.");
                 var notBefore = input.ReadInt64();
                 var wait = Math.Clamp(input.ReadInt32(), 0, 100);
-                var frame = capture.TryRead(TimeSpan.FromMilliseconds(wait), sourceNotBeforeTicks: notBefore, reusePixels: true);
+                var crop=new PixelBounds(input.ReadInt32(),input.ReadInt32(),input.ReadInt32(),input.ReadInt32());
+                var width=input.ReadInt32();var height=input.ReadInt32();
+                if(crop.Left<0 || crop.Top<0 || crop.Right>region.Width || crop.Bottom>region.Height || crop.Width<=0 || crop.Height<=0
+                    || width<=0 || height<=0 || (long)width*height>1_000_000 || (long)width*height*4>pixels.Capacity)
+                    throw new InvalidDataException("Invalid sampled capture geometry.");
+                var cachedSource=command==4 ? input.ReadInt64() : 0;
+                var frame=command==4
+                    ? cachedNative is not null && cachedGeneration==generation && cachedNative.SourceQpcTicks==cachedSource
+                        && cachedSource>=notBefore ? cachedNative : null
+                    : capture.TryRead(TimeSpan.FromMilliseconds(wait),sourceNotBeforeTicks:notBefore,reusePixels:true);
+                if(command==1 && frame is not null) {cachedNative=frame;cachedGeneration=generation;}
                 if (frame is null)
                 { output.Write((byte)0); output.Write(sequence); output.Write(generation); output.Write(capture.SceneRevision); }
                 else
                 {
-                    pixels.Write(frame.Pixels);
+                    var bytes=checked(width*height*4);
+                    if(sampled?.Length!=bytes) sampled=new byte[bytes];
+                    resize.ResizeInto(frame,width,height,crop,sampled);
+                    pixels.Write(sampled);
                     output.Write((byte)1); output.Write(sequence); output.Write(generation);
                     output.Write(capture.SceneRevision);
-                    output.Write(frame.Width); output.Write(frame.Height);
-                    output.Write(frame.SourceQpcTicks); output.Write(frame.Pixels.Length);
+                    output.Write(width); output.Write(height);
+                    output.Write(frame.SourceQpcTicks); output.Write(bytes);
+                    output.Write(crop.Left);output.Write(crop.Top);output.Write(crop.Right);output.Write(crop.Bottom);
                 }
                 output.Flush();
                 global::Program.Pump(TimeSpan.FromMilliseconds(1));

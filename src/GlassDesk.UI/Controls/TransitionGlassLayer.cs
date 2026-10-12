@@ -11,6 +11,9 @@ internal sealed class TransitionGlassLayer : FrameworkElement
 {
     private BitmapSource? _backdrop;
     private TransitionGlassEffect? _lens;
+    private readonly DrawingGroup _drawing = new();
+    private bool _sleeping;
+    private bool _frosted;
     private Rect _panel;
     private double _radius, _strength;
     public bool UsesGpuLens => Effect is TransitionGlassEffect;
@@ -31,16 +34,30 @@ internal sealed class TransitionGlassLayer : FrameworkElement
     {
         if (ReferenceEquals(backdrop, _backdrop)) return;
         _backdrop = backdrop;
+        if (backdrop is null) _drawing.Children.Clear();
         InvalidateVisual();
     }
 
-    public void SetPanel(Rect panel, Rect backdropBounds, double radius, double strength, bool launchpadOptics = false)
+    public void SetPerformanceSleeping(bool sleeping)
+    {
+        _sleeping = sleeping;
+        if (!sleeping) return;
+        SetBackdrop(null);
+        _drawing.Children.Clear();
+        Effect = null;
+        _lens = null;
+    }
+
+    public void SetPanel(Rect panel, Rect backdropBounds, double radius, double strength, bool launchpadOptics = false,
+        bool frosted = false)
     {
         if (backdropBounds.Width <= 0 || backdropBounds.Height <= 0) return;
         _panel = new Rect(panel.X - backdropBounds.X, panel.Y - backdropBounds.Y, panel.Width, panel.Height);
         _radius = radius;
         _strength = strength;
-        if (GlassDesk.UI.BackdropRecovery.RequiresBasicRendering || !RenderCapability.IsPixelShaderVersionSupported(3, 0))
+        _frosted = frosted;
+        if (_sleeping) return;
+        if (frosted || GlassDesk.UI.BackdropRecovery.RequiresBasicRendering || !RenderCapability.IsPixelShaderVersionSupported(3, 0))
         {
             Effect = null;
             InvalidateVisual();
@@ -63,6 +80,14 @@ internal sealed class TransitionGlassLayer : FrameworkElement
     protected override void OnRender(DrawingContext dc)
     {
         base.OnRender(dc);
+        using (var content = _drawing.Open()) DrawBackdrop(content);
+        dc.DrawDrawing(_drawing);
+    }
+
+    private void DrawBackdrop(DrawingContext dc)
+    {
+        if (_frosted && _panel.Width > 0 && _panel.Height > 0)
+            dc.PushClip(SquircleGlassGeometry.Create(_panel, _radius));
         if (_backdrop is not null) dc.DrawImage(_backdrop, new Rect(RenderSize));
         if (_backdrop is not null && !UsesGpuLens && _panel.Width > 0 && _panel.Height > 0)
         {
@@ -74,5 +99,6 @@ internal sealed class TransitionGlassLayer : FrameworkElement
             }, new Point(0, 0), new Point(1, 1));
             dc.DrawGeometry(null, new Pen(rim, 1.5 * _strength), SquircleGlassGeometry.Create(_panel, _radius));
         }
+        if (_frosted && _panel.Width > 0 && _panel.Height > 0) dc.Pop();
     }
 }

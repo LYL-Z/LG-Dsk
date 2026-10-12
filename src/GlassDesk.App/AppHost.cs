@@ -176,6 +176,7 @@ internal sealed partial class AppHost : IDisposable
         CreateTrayIcon();
 
         CreateWindows();
+        InitializePerformanceCoordinator();
         InitializeInteractionController();
 
         theme.Changed += OnThemeChanged;
@@ -248,6 +249,7 @@ internal sealed partial class AppHost : IDisposable
         }
 
         DisposeInteractionController();
+        DisposePerformanceCoordinator();
 
         _tray?.Dispose();
         _tray = null;
@@ -278,10 +280,19 @@ internal sealed partial class AppHost : IDisposable
             return;
         }
 
-        _launcher.RefreshDiagnostics();
-        _dock?.SetLauncherContainerState(true);
-        _launcher.ShowWithTransition(sourceBounds ?? _dock?.GetLauncherButtonPixelBounds());
-        _launcher.Activate();
+        RequestPerformanceActivation();
+        try
+        {
+            _launcher.RefreshDiagnostics();
+            _dock?.SetLauncherContainerState(true);
+            _launcher.ShowWithTransition(sourceBounds ?? _dock?.GetLauncherButtonPixelBounds());
+            _launcher.Activate();
+        }
+        finally
+        {
+            _performanceActivationPending = false;
+            ReconcilePerformance();
+        }
     }
 
     private void HideLauncher() => _launcher?.CloseWithTransition();
@@ -295,6 +306,8 @@ internal sealed partial class AppHost : IDisposable
 
         _settings.RefreshDiagnostics(_loadReport);
         _settings.RefreshStartupRegistration();
+        _settings.RefreshInstallationStatus(() =>
+            new InstallationLocator().Inspect(Environment.ProcessPath ?? string.Empty));
 
         if (!_settings.IsVisible)
         {
@@ -350,6 +363,7 @@ internal sealed partial class AppHost : IDisposable
         _settings.AttachInstallation(new InstallationLocator().Inspect(Environment.ProcessPath ?? string.Empty));
         _dock.AttachServices(_services!, _dockSettings!, (PixelRect? source) =>
             ToggleLauncherFromDock(_launcher, source, ShowLauncher));
+        _dock.ToggleDesktopIcons = () => ExecuteInteraction(GlassDesk.Core.Input.InputAction.ToggleDesktopIcons);
         _launcher.AttachServices(_services!, _loadReport?.LibraryStatus != LoadStatus.Unrecoverable);
         _launcher.InternalDragStarted += (_, _) => _dock?.RaiseAboveLauncherDuringDrag();
         _launcher.InternalDragFinished += (_, _) => _launcher?.RaiseAboveDockAfterDrag();
@@ -357,11 +371,10 @@ internal sealed partial class AppHost : IDisposable
         {
             if (_application.Dispatcher.CheckAccess())
             {
-                _dock?.RefreshTiles();
-                _launcher?.RefreshLibrary();
+                RefreshLibraryForPerformance();
             }
             else
-                _application.Dispatcher.BeginInvoke(() => { _dock?.RefreshTiles(); _launcher?.RefreshLibrary(); });
+                _application.Dispatcher.BeginInvoke(RefreshLibraryForPerformance);
         };
         _settings.LauncherSettingsChanged += (_, settings) => _launcher?.ApplySettings(settings);
 
@@ -429,7 +442,12 @@ internal sealed partial class AppHost : IDisposable
         if (msg == 0x0312)
         {
             if (_settings?.TryCaptureRegisteredHotkey(lParam) != true)
+            {
+                var key = (uint)((lParam.ToInt64() >> 16) & 0xFFFF);
+                if (_performance?.IsSuppressionRequested == true && _launcher?.IsVisible != true && key is 5 or 6 or 0x100 or 0x101)
+                { handled = true; return 0; }
                 _interaction?.HandleHotkey(wParam.ToInt32());
+            }
             handled = true;
             return 0;
         }
@@ -469,6 +487,9 @@ internal sealed partial class AppHost : IDisposable
 
         menu.Items.Add(CreateMenuItem("打开启动台", ShowLauncher));
         menu.Items.Add(CreateMenuItem("隐藏启动台", HideLauncher));
+        var gameSleep = new MenuItem { Header = "游戏休眠", IsCheckable = true, IsChecked = RuntimeManualGameSleep };
+        gameSleep.Click += (_, _) => SetManualGameSleep(gameSleep.IsChecked);
+        menu.Items.Add(gameSleep);
         menu.Items.Add(new Separator());
         menu.Items.Add(CreateMenuItem("设置…", ShowSettings));
         menu.Items.Add(CreateMenuItem("打开数据文件夹", OpenDataFolder));

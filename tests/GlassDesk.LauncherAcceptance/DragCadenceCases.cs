@@ -27,7 +27,6 @@ internal static partial class Program
         var surface = (LiquidGlassSurface)window.FindName("GlassSurface")!;
         var opticsField = typeof(LiquidGlassSurface).GetField("_lastOpticsMilliseconds", flags)!;
         var background = (GlassBackgroundLayer)typeof(LiquidGlassSurface).GetField("_background", flags)!.GetValue(surface)!;
-        var captureField = typeof(GlassBackgroundLayer).GetField("_lastCapture", flags)!;
         var rows = new List<object>();
         var inputHeartbeat = new List<object>();
         long lastInputTicks = 0;
@@ -38,7 +37,7 @@ internal static partial class Program
             var now = Stopwatch.GetTimestamp();
             if (lastInputTicks != 0 && inputHeartbeat.Count < 20000)
             {
-                var captured = (BackdropFrame?)captureField.GetValue(background);
+                var captured = background.LastCaptureTiming;
                 inputHeartbeat.Add(new
                 {
                     atTicks = now, inputMode = InputMode(), gapMilliseconds = Stopwatch.GetElapsedTime(lastInputTicks, now).TotalMilliseconds,

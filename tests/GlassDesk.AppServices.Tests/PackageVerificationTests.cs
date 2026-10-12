@@ -20,6 +20,18 @@ public sealed class PackageVerificationTests : IDisposable
     public PackageVerificationTests() => Directory.CreateDirectory(_root);
 
     [Fact]
+    public void 未知发行状态仍然拒绝()
+    {
+        var fixture = CandidateFixture.Create(_root);
+        var manifest = JsonNode.Parse(File.ReadAllText(fixture.ReleaseManifest))!;
+        manifest["status"] = "external-unverified";
+        File.WriteAllText(fixture.ReleaseManifest, manifest.ToJsonString());
+        var result = RunVerifier(fixture);
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("Unsupported", result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void 有效的未签名候选包通过且校验不改动输入()
     {
         var fixture = CandidateFixture.Create(_root);

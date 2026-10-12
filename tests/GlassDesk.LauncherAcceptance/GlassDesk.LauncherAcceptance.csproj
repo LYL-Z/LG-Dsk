@@ -6,6 +6,7 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\GlassDesk.Dock\GlassDesk.Dock.csproj" />
     <ProjectReference Include="..\..\src\GlassDesk.Launcher\GlassDesk.Launcher.csproj" />
     <ProjectReference Include="..\..\src\GlassDesk.AppServices\GlassDesk.AppServices.csproj" />
     <ProjectReference Include="..\..\src\GlassDesk.Settings\GlassDesk.Settings.csproj" />

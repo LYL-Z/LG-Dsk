@@ -16,6 +16,7 @@ internal sealed class RecoveringDesktopSceneCapture : IDesktopSceneCapture
     private bool _disposed;
     private long _reprobeAt;
     public bool AllowsStaticContent => _source?.AllowsStaticContent == true;
+    public bool SupportsSampling => _source?.SupportsSampling == true;
     public long SceneRevision => _source?.SceneRevision ?? 0;
     internal nint CarrierHandle => _source?.CarrierHandle ?? 0;
     nint IDesktopSceneCapture.CarrierHandle => CarrierHandle;
@@ -85,6 +86,13 @@ internal sealed class RecoveringDesktopSceneCapture : IDesktopSceneCapture
     bool IDesktopSceneCapture.UpdateExclusions() => UpdateExclusions();
     internal CapturePixels? TryRead(TimeSpan waitForFrame = default, CancellationToken cancellation = default,
         long sourceNotBeforeTicks = 0, bool reusePixels = false)
+        => ReadFrame(source=>source.TryRead(waitForFrame,cancellation,sourceNotBeforeTicks,reusePixels),
+            cancellation,sourceNotBeforeTicks);
+    internal CapturePixels? TryReadSampled(PixelBounds crop,int width,int height,byte[] target,
+        TimeSpan waitForFrame=default,CancellationToken cancellation=default,long sourceNotBeforeTicks=0)
+        => ReadFrame(source=>source.TryReadSampled(crop,width,height,target,waitForFrame,cancellation,sourceNotBeforeTicks),
+            cancellation,sourceNotBeforeTicks);
+    private CapturePixels? ReadFrame(Func<IDesktopSceneCapture,CapturePixels?> read,CancellationToken cancellation,long sourceNotBeforeTicks)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         cancellation.ThrowIfCancellationRequested();
@@ -100,7 +108,7 @@ internal sealed class RecoveringDesktopSceneCapture : IDesktopSceneCapture
                 // Active scene churn must not indefinitely postpone failure detection.
                 if (_initialDeadline == 0 || resumed) _initialDeadline = now + Stopwatch.Frequency * 3;
             }
-            var frame = _source!.TryRead(waitForFrame, cancellation, sourceNotBeforeTicks, reusePixels);
+            var frame = read(_source!);
             if (frame is not null) _initialDeadline = _fallback || AllowsStaticContent ? 0 : _clock() + Stopwatch.Frequency * 3;
             else if (!cancellation.IsCancellationRequested && _initialDeadline != 0 && _clock() > _initialDeadline)
                 // A static documented thumbnail may emit just one frame. Only
@@ -112,11 +120,13 @@ internal sealed class RecoveringDesktopSceneCapture : IDesktopSceneCapture
         catch (Exception error) when (!_fallback && !cancellation.IsCancellationRequested)
         {
             Recover(error);
-            return TryRead(waitForFrame, cancellation, sourceNotBeforeTicks, reusePixels);
+            return ReadFrame(read,cancellation,sourceNotBeforeTicks);
         }
     }
     CapturePixels? IDesktopSceneCapture.TryRead(TimeSpan wait, CancellationToken cancellation, long notBefore, bool reuse)
         => TryRead(wait, cancellation, notBefore, reuse);
+    CapturePixels? IDesktopSceneCapture.TryReadSampled(PixelBounds crop,int width,int height,byte[] target,TimeSpan wait,
+        CancellationToken cancellation,long notBefore) => TryReadSampled(crop,width,height,target,wait,cancellation,notBefore);
     internal void ReleaseReadbackBuffers()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);

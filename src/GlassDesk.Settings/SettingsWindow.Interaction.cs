@@ -4,6 +4,7 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using Microsoft.Win32;
 using GlassDesk.Core.Input;
+using GlassDesk.Core.Models;
 using GlassDesk.Core.Models.Settings;
 using GlassDesk.Platform.Installation;
 using GlassDesk.UI.Settings;
@@ -42,6 +43,13 @@ public partial class SettingsWindow
             InstallationState.VerifiedInstalled => $"已核验此安装及卸载程序：{installationInfo.UninstallerPath}\n卸载程序不会删除 GlassDesk 用户数据。",
             _ => "安装登记不完整或与当前程序不匹配，已停用卸载入口。" + Environment.NewLine + installationInfo.Error,
         };
+    }
+
+    /// <summary>在设置页打开前重新读取安装登记，避免沿用启动时的过期状态。</summary>
+    public void RefreshInstallationStatus(Func<InstallationInfo> inspect)
+    {
+        ArgumentNullException.ThrowIfNull(inspect);
+        AttachInstallation(inspect());
     }
 
     /// <summary>报告启动卸载程序失败并允许用户稍后重试。</summary>
@@ -84,6 +92,7 @@ public partial class SettingsWindow
         try
         {
             var appearance = _dataStore.Settings.Current.Appearance;
+            AppearanceMaterialCombo.SelectedIndex = appearance.GlassMaterial == GlassMaterialMode.FrostedGlass ? 1 : 0;
             DockTransparencySlider.Value = appearance.DockGlassTransparency;
             LauncherTransparencySlider.Value = appearance.LauncherGlassTransparency;
             DockTransparencyValue.Text = appearance.DockGlassTransparency.ToString("P0", CultureInfo.CurrentCulture);
@@ -99,6 +108,8 @@ public partial class SettingsWindow
         if (_loadingAppearanceControls || _dataStore is null) return;
         var current = _dataStore.Settings.Current;
         var snapshot = SettingsPageEditor.Clone(current);
+        current.Appearance.GlassMaterial = AppearanceMaterialCombo.SelectedIndex == 1
+            ? GlassMaterialMode.FrostedGlass : GlassMaterialMode.AndroidLiquidGlass;
         current.Appearance.ReduceMotion = ReduceMotionCheck.IsChecked == true;
         SavePageSnapshot(snapshot, "外观", AppearanceStatus);
     }
@@ -406,6 +417,7 @@ public partial class SettingsWindow
             ThemeService.Current?.Update(current.Appearance);
         }
         if (page == "启动台") LauncherSettingsChanged?.Invoke(this, current.Launcher);
+        if (page == "性能") PerformanceSettingsChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void ReloadPage(string page)
@@ -416,6 +428,7 @@ public partial class SettingsWindow
             case "Dock": LoadDockControls(); DockSettingsHost.Current?.Update(_dataStore!.Settings.Current.Dock); break;
             case "启动台": LoadLauncherControls(); LauncherSettingsChanged?.Invoke(this, _dataStore!.Settings.Current.Launcher); break;
             case "快捷操作": LoadInteractionControls(); break;
+            case "性能": LoadPerformanceControls(); break;
             case "桌面": LoadDesktopStatus(); break;
         }
     }
@@ -423,6 +436,6 @@ public partial class SettingsWindow
     private TextBlock StatusFor(string page) => page switch
     {
         "外观" => AppearanceStatus, "Dock" => DockSettingsStatus, "启动台" => LauncherSettingsStatus,
-        "快捷操作" => InteractionSettingsStatus, _ => DesktopSettingsStatus,
+        "快捷操作" => InteractionSettingsStatus, "性能" => PerformanceSettingsStatus, _ => DesktopSettingsStatus,
     };
 }

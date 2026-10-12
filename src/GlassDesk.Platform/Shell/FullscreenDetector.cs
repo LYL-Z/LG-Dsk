@@ -24,6 +24,9 @@ public enum FullscreenVerdict
     Excluded = 3,
 }
 
+/// <summary>A nullable verdict preserves the prior foreign window during session switches and own menus.</summary>
+public readonly record struct PerformanceFullscreenObservation(bool? IsFullscreen, bool BelongsToCurrentProcess);
+
 /// <summary>
 /// 外壳报告的用户通知状态，即 <c>SHQueryUserNotificationState</c> 的返回码。
 /// </summary>
@@ -301,6 +304,18 @@ public static class FullscreenDetector
         // 几何不认为全屏时，才轮到可选的第二条路径——顺序是有意的：
         // 常见情况（没有全屏应用）只需付出几何那几微秒。
         return effective.IncludeShellState && IsFullscreenState(QueryShellStateCore().State);
+    }
+
+    /// <summary>Read one foreground handle consistently. Only the specific exclusive-D3D shell state augments geometry.</summary>
+    public static PerformanceFullscreenObservation ReadPerformanceObservation()
+    {
+        var handle = User32.GetForegroundWindow();
+        if (handle == 0) return new(null, false);
+        if (GetProcessId(handle) == (uint)Environment.ProcessId) return new(null, true);
+        if (IsExcluded(handle, FullscreenOptions.Default, out _)) return new(false, false);
+        if (!TryGetGeometry(handle, out var geometry, out _)) return new(null, false);
+        var coversMonitor = Covers(geometry.VisibleFrame ?? geometry.WindowRect, geometry.MonitorBounds);
+        return new(coversMonitor || QueryShellStateCore().State == UserNotificationState.RunningD3dFullScreen, false);
     }
 
     /// <summary>

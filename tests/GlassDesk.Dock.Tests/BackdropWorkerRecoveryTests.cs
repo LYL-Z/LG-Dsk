@@ -25,11 +25,13 @@ public sealed class BackdropWorkerRecoveryTests
         {
             if (feed.TryRead(new GlassDesk.Platform.Displays.PixelRect(0, 0, 2, 2), 2, 2, out var frame)
                 && frame?.Pixels.Span[0] == 192) { restored = frame; break; }
+            frame?.Dispose();
             Thread.Sleep(5);
         }
         Assert.NotNull(restored);
         Assert.Equal(2, attempts);
         Assert.Null(feed.Failure);
+        restored?.Dispose();
     }
 
     private sealed class SceneSource(byte color, Action tick, bool stall = false) : IDesktopSceneCapture
@@ -82,5 +84,6 @@ public sealed class BackdropWorkerRecoveryTests
         Assert.NotNull(frame);
         Assert.Equal(2, attempts);
         Assert.Null(feed.Failure);
+        frame?.Dispose();
     }
 }

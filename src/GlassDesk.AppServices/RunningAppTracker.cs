@@ -42,6 +42,26 @@ public sealed class RunningAppTracker : IDisposable
     private IReadOnlyList<WindowIdentityInfo> _windows = [];
     private DateTime _lastReconcileUtc = DateTime.MinValue;
     private volatile bool _disposed;
+    private bool _suspended, _dirty;
+    private long _runtimeGeneration, _reconcileCount;
+
+    /// <summary>Completed enumeration count, useful for resource-lifecycle diagnostics.</summary>
+    public long ReconcileCount => Interlocked.Read(ref _reconcileCount);
+    public bool IsSuspended { get { lock (_sync) return _suspended; } }
+
+    public void SetSuspended(bool suspended)
+    {
+        bool reconcile;
+        lock (_sync)
+        {
+            if (_disposed || _suspended == suspended) return;
+            _suspended = suspended;
+            _runtimeGeneration++;
+            reconcile = !suspended && _dirty;
+            if (reconcile) _lastReconcileUtc = DateTime.MinValue;
+        }
+        if (reconcile) Reconcile();
+    }
 
     public RunningAppTracker(AppLibraryStore library)
     {
@@ -97,8 +117,10 @@ public sealed class RunningAppTracker : IDisposable
             return 0;
         }
 
+        long generation;
         lock (_sync)
         {
+            if (_suspended) { _dirty = true; return _windows.Count; }
             // 与上次调和贴得太近就跳过：事件合并（120 毫秒）之后仍可能
             // 有成串的通知，重复的全量枚举没有意义。
             if (DateTime.UtcNow - _lastReconcileUtc < MinimumReconcileInterval)
@@ -107,6 +129,7 @@ public sealed class RunningAppTracker : IDisposable
             }
 
             _lastReconcileUtc = DateTime.UtcNow;
+            generation = _runtimeGeneration;
         }
 
         var windows = WindowLocator.EnumerateTopLevelWindows();
@@ -114,6 +137,10 @@ public sealed class RunningAppTracker : IDisposable
 
         lock (_sync)
         {
+            if (_disposed || _suspended || generation != _runtimeGeneration)
+            { _dirty = true; return _windows.Count; }
+            _dirty = false;
+            _reconcileCount++;
             changed = !SameWindowSet(_windows, windows);
             _windows = windows;
         }
