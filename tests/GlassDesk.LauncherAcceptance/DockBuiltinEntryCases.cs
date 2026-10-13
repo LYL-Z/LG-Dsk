@@ -43,6 +43,11 @@ internal static partial class Program
             var launcher = (LauncherWindow)hostType.GetField("_launcher", flags)!.GetValue(host)!;
             var data = (GlassDeskDataStore)hostType.GetField("_data", flags)!.GetValue(host)!;
             originalIcons = settings.DesktopIconsRead?.Invoke();
+            if (args.Contains("--desktop-icon-continuity"))
+            {
+                VerifyDesktopIconToggleContinuity(host, hostType, dock, launcher, settings, evidence, Argument(args, "--fixture-exe"));
+                return _failed == 0 ? 0 : 1;
+            }
             var beforeOrder = data.Layouts.Dock.PinnedItemIds.ToArray();
             hostType.GetMethod("ShowSettings", flags)!.Invoke(host, null);
             ((ListBox)settings.FindName("SettingsPageList")!).SelectedIndex = 1;

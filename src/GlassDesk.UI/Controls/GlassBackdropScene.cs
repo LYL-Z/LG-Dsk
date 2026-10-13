@@ -44,6 +44,11 @@ internal sealed class GlassBackdropScene : IEquatable<GlassBackdropScene>
         && _recoveryGeneration == previous._recoveryGeneration
         && previous._windows.All(window => window.IsTransientOverlay || _windows.Contains(window));
 
+    // A visible surface may finish the currently displayed texture while a new
+    // ordinary window scene is acquired. Recovery boundaries remain invalid.
+    internal bool CanHandoffMaterialFrom(GlassBackdropScene? previous) => previous is not null
+        && _recoveryGeneration == previous._recoveryGeneration;
+
     public bool Equals(GlassBackdropScene? other) => other is not null && _recoveryGeneration == other._recoveryGeneration
         && _windows.AsSpan().SequenceEqual(other._windows);
     public override bool Equals(object? obj) => obj is GlassBackdropScene other && Equals(other);

@@ -7,6 +7,9 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using GlassDesk.UI;
+using GlassDesk.Dock;
 using GlassDesk.Launcher;
 using GlassDesk.Platform.Displays;
 using GlassDesk.Platform.Shell;
@@ -66,6 +69,11 @@ internal static partial class Program
             dock = (Window)hostType.GetField("_dock", PerformanceInstance)!.GetValue(host)!;
             UseProductCaptureWorkers();
             launcher.ShowInTaskbar = true;
+            if (args.Contains("--observe-dock-repro"))
+            {
+                ObserveRealDesktopDock();
+                return _failed == 0 ? 0 : 1;
+            }
             if (dockOnly)
             {
                 VerifyCoveredDockReveal();
@@ -217,6 +225,50 @@ internal static partial class Program
             File.WriteAllText(phaseFile, name);
             stages.Add(new { phase = name, timestamp = DateTimeOffset.Now, processId = Environment.ProcessId });
         }
+        void ObserveRealDesktopDock()
+        {
+            var window = (DockWindow)dock!;
+            var surface = (LiquidGlassSurface)window.FindName("GlassSurface")!;
+            var background = (GlassBackgroundLayer)typeof(LiquidGlassSurface).GetField("_background", PerformanceInstance)!.GetValue(surface)!;
+            var feed = (SharedBackdropFeed)typeof(GlassBackgroundLayer).GetField("_compatible", PerformanceInstance)!.GetValue(background)!;
+            var traces = new System.Collections.Concurrent.ConcurrentQueue<CaptureTrace>();
+            var original = feed.TraceObserved;
+            feed.TraceObserved = trace => { original?.Invoke(trace); traces.Enqueue(trace); while (traces.Count > 20000) traces.TryDequeue(out _); };
+            var rect = (PixelRect)typeof(DockWindow).GetField("_restingRect", PerformanceInstance)!.GetValue(window)!;
+            var marker = Path.Combine(evidence, "marker.txt");
+            File.WriteAllText(marker, "initial");
+            File.WriteAllText(Path.Combine(evidence, "ready.json"), JsonSerializer.Serialize(new { processId = Environment.ProcessId, dockRect = rect }));
+            Phase("observe-ready");
+            using var log = new StreamWriter(Path.Combine(evidence, "timeline.jsonl")) { AutoFlush = true };
+            var clock = Stopwatch.StartNew();
+            var previousMarker = "";
+            while (clock.Elapsed.TotalSeconds < 180 && !File.Exists(Path.Combine(evidence, "stop")))
+            {
+                var currentMarker = File.ReadAllText(marker).Trim();
+                var row = new { elapsed = clock.Elapsed.TotalMilliseconds, marker = currentMarker,
+                    foreground = GetPerformanceForegroundWindow().ToInt64(), snapshot = Snapshot(), timing = background.LastCaptureTiming,
+                    slide = typeof(DockWindow).GetField("_slideOffsetPixels", PerformanceInstance)!.GetValue(window),
+                    autoHide = typeof(DockWindow).GetField("_autoHide", PerformanceInstance)!.GetValue(window)?.GetType().GetProperty("State")?.GetValue(typeof(DockWindow).GetField("_autoHide", PerformanceInstance)!.GetValue(window))?.ToString(),
+                    feedTiming = feed.InspectTiming(), recovery = BackdropRecovery.Generation };
+                log.WriteLine(JsonSerializer.Serialize(row));
+                File.WriteAllText(Path.Combine(evidence, "current.json"), JsonSerializer.Serialize(row, new JsonSerializerOptions { WriteIndented = true }));
+                if (currentMarker != previousMarker)
+                {
+                    previousMarker = currentMarker;
+                    var texture = typeof(LiquidGlassSurface).GetField("_transitionBackdrop", PerformanceInstance)!.GetValue(surface) as BitmapSource;
+                    if (texture is not null)
+                    {
+                        var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(texture));
+                        using var output = File.Create(Path.Combine(evidence, currentMarker + "-texture.png")); encoder.Save(output);
+                    }
+                    File.WriteAllText(Path.Combine(evidence, currentMarker + "-traces.json"), JsonSerializer.Serialize(traces.ToArray()));
+                }
+                Pump(TimeSpan.FromMilliseconds(100));
+            }
+            File.WriteAllText(Path.Combine(evidence, "traces.json"), JsonSerializer.Serialize(traces.ToArray()));
+            feed.TraceObserved = original;
+            observations.Add(new { phase = "real-desktop-observation", seconds = clock.Elapsed.TotalSeconds, snapshot = Snapshot() });
+        }
         void RunFocusedRevealSleep()
         {
             SamplePhase("idle-warmup", phaseSeconds); SamplePhase("idle", phaseSeconds);
@@ -256,7 +308,6 @@ internal static partial class Program
             var command = Path.Combine(evidence, "dock-cover-command.txt");
             var ready = Path.Combine(evidence, "dock-cover-ready.json");
             var cursor = DisplayService.GetCursorPixelPoint();
-            var record = Assembly.GetExecutingAssembly().GetType("FirstFrameRecording")!.GetMethod("Record", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)!;
             try
             {
                 IosInput.SetCursorPos(primary.Bounds.X + 20, primary.Bounds.Y + 20);
@@ -278,8 +329,7 @@ internal static partial class Program
                 Check("外部前台窗口遮挡后Dock正常隐藏", "reveal-sleep/dock", covered, "hidden through production coverage", slide.GetValue(dockWindow)!.ToString()!);
                 if (!covered) return;
                 Pump(TimeSpan.FromSeconds(6));
-                record.Invoke(null, [dockWindow, new Action(() => File.WriteAllText(command, "uncover")),
-                    Path.Combine(evidence, "dock-window-uncover"), TimeSpan.FromSeconds(2)]);
+                RecordDockWake("dock-window-uncover", () => File.WriteAllText(command, "uncover"));
                 Check("移开遮挡窗口后Dock唤出", "reveal-sleep/dock", (double)slide.GetValue(dockWindow)! == 0,
                     "resting offset=0", slide.GetValue(dockWindow)!.ToString()!);
                 File.WriteAllText(command, "cover");
@@ -287,20 +337,111 @@ internal static partial class Program
                 if (!PumpUntil(() => (double)slide.GetValue(dockWindow)! >= hidden - .5, TimeSpan.FromSeconds(5)))
                     throw new InvalidOperationException("Dock did not hide for edge-reveal recording.");
                 Pump(TimeSpan.FromSeconds(6));
-                record.Invoke(null, [dockWindow, new Action(() => IosInput.SetCursorPos(resting.X + resting.Width / 2, resting.Bottom - 2)),
-                    Path.Combine(evidence, "dock-bottom-edge-reveal"), TimeSpan.FromSeconds(2)]);
+                RecordDockWake("dock-bottom-edge-reveal", () => IosInput.SetCursorPos(resting.X + resting.Width / 2, resting.Bottom - 2));
                 // GIF encoding blocks this dispatcher after the sampled desktop
                 // interval. Drain any queued slide ticks before checking its endpoint.
                 var edgeSettled = PumpUntil(() => (double)slide.GetValue(dockWindow)! == 0,
                     TimeSpan.FromSeconds(2));
                 Check("遮挡时靠近底边正常唤出Dock", "reveal-sleep/dock", edgeSettled,
                     "resting offset=0", slide.GetValue(dockWindow)!.ToString()!);
+                if (args.Contains("--dock-reveal-long"))
+                {
+                    IosInput.SetCursorPos(primary.Bounds.X + 32, primary.Bounds.Y + primary.Bounds.Height / 2 + 32);
+                    IosInput.Mouse(2); IosInput.Mouse(4);
+                    IosInput.SetCursorPos(primary.Bounds.X + 20, primary.Bounds.Y + 20);
+                    if (!PumpUntil(() => (double)slide.GetValue(dockWindow)! >= hidden - .5, TimeSpan.FromSeconds(5)))
+                        throw new InvalidOperationException("Dock did not hide before the warm-content test.");
+                    File.WriteAllText(command, "content-blue");
+                    Pump(TimeSpan.FromSeconds(1));
+                    RecordDockWake("dock-short-hidden-content-change", () => IosInput.SetCursorPos(resting.X + resting.Width / 2, resting.Bottom - 2));
+                    IosInput.SetCursorPos(primary.Bounds.X + 32, primary.Bounds.Y + primary.Bounds.Height / 2 + 32);
+                    IosInput.Mouse(2); IosInput.Mouse(4);
+                    IosInput.SetCursorPos(primary.Bounds.X + 20, primary.Bounds.Y + 20);
+                    if (!PumpUntil(() => (double)slide.GetValue(dockWindow)! >= hidden - .5, TimeSpan.FromSeconds(5)))
+                        throw new InvalidOperationException("Dock did not hide before the long-hidden test.");
+                    Pump(TimeSpan.FromSeconds(31));
+                    RecordDockWake("dock-long-hidden-edge-reveal", () => IosInput.SetCursorPos(resting.X + resting.Width / 2, resting.Bottom - 2));
+                }
+                if (args.Contains("--dock-reveal-repeat"))
+                {
+                    for (var repeat = 0; repeat < 8; repeat++)
+                    {
+                        IosInput.SetCursorPos(primary.Bounds.X + 32, primary.Bounds.Y + primary.Bounds.Height / 2 + 32);
+                        IosInput.Mouse(2); IosInput.Mouse(4);
+                        IosInput.SetCursorPos(primary.Bounds.X + 20, primary.Bounds.Y + 20);
+                        if (!PumpUntil(() => (double)slide.GetValue(dockWindow)! >= hidden - .5, TimeSpan.FromSeconds(5)))
+                            throw new InvalidOperationException("Dock did not conceal during repeated reveal " + repeat);
+                        File.WriteAllText(command, repeat % 2 == 0 ? "content-blue" : "content-red");
+                        Pump(TimeSpan.FromMilliseconds(repeat % 3 == 0 ? 250 : repeat % 3 == 1 ? 1000 : 2000));
+                        RecordDockWake("dock-repeat-" + repeat, () => IosInput.SetCursorPos(resting.X + resting.Width / 2, resting.Bottom - 2), true);
+                    }
+                    for (var repeat = 0; repeat < 4; repeat++)
+                    {
+                        File.WriteAllText(command, "cover");
+                        Pump(TimeSpan.FromMilliseconds(150));
+                        IosInput.SetCursorPos(primary.Bounds.X + 32, primary.Bounds.Y + primary.Bounds.Height / 2 + 32);
+                        IosInput.Mouse(2); IosInput.Mouse(4);
+                        IosInput.SetCursorPos(primary.Bounds.X + 20, primary.Bounds.Y + 20);
+                        if (!PumpUntil(() => (double)slide.GetValue(dockWindow)! >= hidden - .5, TimeSpan.FromSeconds(5)))
+                            throw new InvalidOperationException("Dock did not conceal before repeated uncover " + repeat);
+                        Pump(TimeSpan.FromMilliseconds(500));
+                        RecordDockWake("dock-repeat-uncover-" + repeat, () => File.WriteAllText(command, "uncover"), true);
+                    }
+                }
                 observations.Add(new { phase = "dock-reveal", snapshot = Snapshot() });
             }
             finally
             {
                 if (fixture is not null) StopFixture();
                 if (cursor is { } point) IosInput.SetCursorPos(point.X, point.Y);
+            }
+
+            void RecordDockWake(string name, Action wake, bool requireFreshPreparation = false)
+            {
+                var surface = (LiquidGlassSurface)dockWindow.FindName("GlassSurface")!;
+                var sequenceField = typeof(LiquidGlassSurface).GetField("_lastCaptureSequence", PerformanceInstance)!;
+                var generationField = typeof(LiquidGlassSurface).GetField("_lastCaptureGeneration", PerformanceInstance)!;
+                var frameField = typeof(LiquidGlassSurface).GetField("_frame", PerformanceInstance)!;
+                var transitionField = typeof(LiquidGlassSurface).GetField("_transitionBackdrop", PerformanceInstance)!;
+                var oldSequence = (long)sequenceField.GetValue(surface)!;
+                var oldGeneration = (long)generationField.GetValue(surface)!;
+                var preparedField = typeof(LiquidGlassSurface).GetField("_preparedDesktopSnapshots", PerformanceInstance)!;
+                var oldPrepared = (int)preparedField.GetValue(surface)!;
+                var started = Stopwatch.GetTimestamp();
+                double? firstCommitMs = null;
+                var startedWaking = false;
+                var sleptAgain = false;
+                var timeline = new List<object>();
+                EventHandler observe = (_, _) =>
+                {
+                    var elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+                    var sequence = (long)sequenceField.GetValue(surface)!;
+                    var generation = (long)generationField.GetValue(surface)!;
+                    var live = frameField.GetValue(surface) is not null || transitionField.GetValue(surface) is not null;
+                    var changed = sequence != oldSequence || generation != oldGeneration;
+                    var material = SurfaceSnapshot(dockWindow);
+                    var sleeping = material.GetProperty("sleeping").GetBoolean();
+                    if (!sleeping) startedWaking = true;
+                    else if (startedWaking && firstCommitMs is null) sleptAgain = true;
+                    if (firstCommitMs is null && live && changed && surface.IsBackdropActive?.Invoke() == true) firstCommitMs = elapsed;
+                    timeline.Add(new { elapsed, sequence, generation, live, slide = slide.GetValue(dockWindow), host = HostSnapshot(), material });
+                };
+                CompositionTarget.Rendering += observe;
+                try
+                {
+                    FirstFrameRecording.Record(dockWindow, () => { started = Stopwatch.GetTimestamp(); wake(); },
+                        Path.Combine(evidence, name), TimeSpan.FromSeconds(5), DisplayService.GetWindowPixelBounds(new WindowInteropHelper(dockWindow).Handle));
+                }
+                finally { CompositionTarget.Rendering -= observe; }
+                File.WriteAllText(Path.Combine(evidence, name + "-timing.json"), JsonSerializer.Serialize(new
+                { name, firstCommitMs, sleptAgain, oldPrepared, prepared = preparedField.GetValue(surface), note = "Actual production AppHost reveal; composition commit latency is not displayed FPS.", timeline }, new JsonSerializerOptions { WriteIndented = true }));
+                if (requireFreshPreparation)
+                    Check("重复唤出重新准备当前桌面 " + name, "reveal-sleep/dock-current-content", (int)preparedField.GetValue(surface)! > oldPrepared,
+                        "fresh snapshot despite identical HWND scene", oldPrepared + " => " + preparedField.GetValue(surface));
+                Check("Dock 正在唤出时不会再次停止采集 " + name, "reveal-sleep/dock-admission", startedWaking && !sleptAgain,
+                    "no sleep after wake begins", sleptAgain.ToString());
+                Check("Dock 唤出后实时背景及时恢复 " + name, "reveal-sleep/dock-live", firstCommitMs is <= 1000,
+                    "fresh composition within 1000 ms", firstCommitMs?.ToString("F1") ?? "no fresh composition");
             }
         }
         void UseProductCaptureWorkers()
@@ -571,6 +712,11 @@ internal static partial class Program
                 var next = File.ReadAllText(commands);
                 if (next == previous) return;
                 previous = next;
+                if (next is "content-blue" or "content-red")
+                {
+                    window.Background = new SolidColorBrush(next == "content-blue" ? Color.FromRgb(40, 100, 180) : Color.FromRgb(180, 50, 35));
+                    return;
+                }
                 var target = next == "cover" ? bounds
                     : new PixelRect(display.Bounds.X, display.Bounds.Y, display.Bounds.Width, display.Bounds.Height / 3);
                 DisplayService.MoveWindowToPixelRect(hwnd, target);

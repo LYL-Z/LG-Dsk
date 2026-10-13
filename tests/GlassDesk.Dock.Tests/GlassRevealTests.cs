@@ -10,6 +10,102 @@ public sealed class GlassRevealTests
 {
     private const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void VisibleWindowCloseOrMovementKeepsMaterialUntilBoundedFreshFrameHandoff(bool move)
+    {
+        StaTest.Run(() =>
+        {
+            var original = new GlassBackdropScene.SceneWindow((nint)101, 42, 0, 0, 800, 600);
+            var scene = new GlassBackdropScene(original);
+            using var surface = new LiquidGlassSurface { ReadBackdropScene = () => scene };
+            using var feed = new SharedBackdropFeed((state, stop) => stop.WaitHandle.WaitOne());
+            var background = typeof(LiquidGlassSurface).GetField("_background", Private)!.GetValue(surface)!;
+            typeof(GlassBackgroundLayer).GetField("_compatible", Private)!.SetValue(background, feed);
+            var owner = new RevealWindow { Content = surface, Width = 200, Height = 100, ShowActivated = false };
+            try
+            {
+                owner.Show(); surface.UpdateLayout();
+                SeedMaterial(surface);
+                scene = move ? new(original with { Left = 20 }) : new();
+                surface.RequestBackdropRefresh();
+                Assert.True(RenderCenter(surface) > 100,
+                    "An ordinary visible scene change must not replace complete glass with the dark waiting material.");
+                Set(surface, "_materialRetentionUntil", 1L);
+                surface.RequestBackdropRefresh();
+                Assert.True(RenderCenter(surface) < 100,
+                    "The handoff expires if fresh capture stalls; it cannot freeze a closed window indefinitely.");
+            }
+            finally { owner.Close(); }
+        });
+    }
+
+    [Fact]
+    public void VisibleHandoffStillRejectsPixelsAcrossARecoveryBoundary()
+    {
+        StaTest.Run(() =>
+        {
+            var scene = new GlassBackdropScene();
+            using var surface = new LiquidGlassSurface { ReadBackdropScene = () => scene };
+            var owner = new RevealWindow { Content = surface, Width = 200, Height = 100, ShowActivated = false };
+            try
+            {
+                owner.Show(); surface.UpdateLayout(); SeedMaterial(surface);
+                GlassDesk.UI.BackdropRecovery.RetryBackground();
+                scene = new();
+                surface.RequestBackdropRefresh();
+                Assert.True(RenderCenter(surface) < 100, "Recovery cannot authorize the old desktop texture.");
+            }
+            finally { owner.Close(); }
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void VisibleWindowMotionDoesNotSuspendTheProducerOrCancelCurrentComposition(bool previousMaterialExpired)
+    {
+        StaTest.Run(() =>
+        {
+            var original = new GlassBackdropScene.SceneWindow((nint)101, 42, 0, 0, 800, 600);
+            var scene = new GlassBackdropScene(original);
+            using var surface = new LiquidGlassSurface { ReadBackdropScene = () => scene };
+            using var feed = new SharedBackdropFeed((state, stop) => stop.WaitHandle.WaitOne());
+            using var entered = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            var background = typeof(LiquidGlassSurface).GetField("_background", Private)!.GetValue(surface)!;
+            typeof(GlassBackgroundLayer).GetField("_compatible", Private)!.SetValue(background, feed);
+            var worker = (GlassFrameWorker)typeof(LiquidGlassSurface).GetField("_worker", Private)!.GetValue(surface)!;
+            var owner = new RevealWindow { Content = surface, Width = 200, Height = 100, ShowActivated = false };
+            try
+            {
+                owner.Show(); surface.UpdateLayout(); SeedMaterial(surface);
+                feed.TryRead(new(0, 0, 4, 4), 4, 4, out var unused);
+                unused?.Dispose();
+                var state = (LatestBackdropState)typeof(SharedBackdropFeed).GetField("_state", Private)!.GetValue(feed)!;
+                Assert.NotNull(state.CurrentRequest);
+                var pending = worker.RenderBufferedAsync(4, (pixels, _) =>
+                {
+                    entered.Set();
+                    if (!release.Wait(TimeSpan.FromSeconds(3))) throw new TimeoutException("Composition gate timed out.");
+                    pixels[0] = 192; pixels[3] = 255;
+                });
+                Assert.True(entered.Wait(TimeSpan.FromSeconds(1)));
+                scene = new(original with { Left = 20 });
+                if (previousMaterialExpired) Set(surface, "_materialRetentionUntil", 1L);
+                surface.RequestBackdropRefresh();
+                Assert.NotNull(state.CurrentRequest);
+                release.Set();
+                using var result = pending.GetAwaiter().GetResult();
+                Assert.NotNull(result);
+                Assert.True(worker.IsCurrent(result));
+                Assert.Equal(192, result.Pixels[0]);
+            }
+            finally { release.Set(); owner.Close(); }
+        });
+    }
+
     [Fact]
     public void UnverifiedSceneCannotDisplayPreviouslyCapturedWindowPixels()
     {
@@ -32,8 +128,42 @@ public sealed class GlassRevealTests
         });
     }
 
+    [Theory]
+    [InlineData("recent", true)]
+    [InlineData("expired", false)]
+    [InlineData("future", false)]
+    [InlineData("unknown", false)]
+    [InlineData("recovery", false)]
+    [InlineData("pose", false)]
+    public void CompletedVisibleCompositionRequiresFreshPixelsAndTheOriginalCapturePose(string change, bool expected)
+    {
+        StaTest.Run(() =>
+        {
+            var original = new GlassBackdropScene(new GlassBackdropScene.SceneWindow((nint)101, 42, 0, 0, 800, 600));
+            GlassBackdropScene? scene = original;
+            using var surface = new LiquidGlassSurface { ReadBackdropScene = () => scene };
+            var owner = new RevealWindow { Content = surface, Width = 200, Height = 100, ShowActivated = false };
+            try
+            {
+                owner.Show(); surface.UpdateLayout(); SeedMaterial(surface);
+                var capturedStamp = typeof(LiquidGlassSurface).GetMethod("ReadMaterialStamp", Private)!.Invoke(surface, null);
+                if (change == "recovery") GlassDesk.UI.BackdropRecovery.RetryBackground();
+                scene = change == "unknown" ? null : new();
+                surface.RequestBackdropRefresh();
+                if (change == "pose") owner.Left += 40;
+                var ticks = System.Diagnostics.Stopwatch.GetTimestamp();
+                if (change == "expired") ticks -= System.Diagnostics.Stopwatch.Frequency;
+                if (change == "future") ticks += System.Diagnostics.Stopwatch.Frequency;
+                var accepted = (bool)typeof(LiquidGlassSurface).GetMethod("CanCommitCapturedScene", Private)!
+                    .Invoke(surface, [original, capturedStamp, ticks])!;
+                Assert.Equal(expected, accepted);
+            }
+            finally { owner.Close(); }
+        });
+    }
+
     [Fact]
-    public void ChangedLiveSceneDiscardsThePreviousWindowBeforeFreshPixelsArrive()
+    public void ChangedLiveSceneCompletesBoundedHandoffAndDoesNotReturnAfterHiding()
     {
         StaTest.Run(() =>
         {
@@ -49,7 +179,7 @@ public sealed class GlassRevealTests
                 // Simulate an already-running backdrop without letting a real capture
                 // replace the controlled texture during this synchronous render.
                 surface.UpdateLayout();
-                Assert.True(RenderCenter(surface) < 100, "A closed/replaced window must not persist in the visible material.");
+                Assert.True(RenderCenter(surface) > 100, "An already-visible surface keeps complete glass during the bounded handoff.");
                 owner.Hide();owner.Show();
                 Assert.True(RenderCenter(surface) < 100, "A retained live frame from the old scene must not return after hiding.");
             }

@@ -59,6 +59,7 @@ public partial class DockWindow : GlassWindow
     private bool _launcherContainerActive;
     private Rect? _slidePanelBoundsDip;
     private bool _backdropWasActive;
+    private bool _panelWasConcealed;
 
     /// <summary>Keep the collapsed destination present until the expanded container has returned.</summary>
     public void SetLauncherContainerState(bool expanded)
@@ -1282,6 +1283,12 @@ public partial class DockWindow : GlassWindow
     private void ApplySlide(PixelRect restingRect, double slideOffsetPixels)
     {
         var slidePixels = (int)Math.Round(slideOffsetPixels * SlideOutDirection(), MidpointRounding.AwayFromZero);
+        var concealed = restingRect.Height > 0 && Math.Abs(slidePixels) >= restingRect.Height;
+        // HWND equality describes layout, not the pixels painted while hidden.
+        // Retire old glass only once the entire panel is clipped, so every reveal
+        // prepares current content without disturbing the visible hide animation.
+        if (concealed && !_panelWasConcealed) GlassSurface.RetireConcealedMaterial();
+        _panelWasConcealed = concealed;
         var backdropActive = IsOpticalSurfaceVisible;
         if (backdropActive && !_backdropWasActive) GlassSurface.RequestBackdropRefresh(revealing: true);
         _backdropWasActive = backdropActive;
@@ -1353,7 +1360,10 @@ public partial class DockWindow : GlassWindow
 
         if (_frameTimer is null)
         {
-            _frameTimer = new System.Windows.Threading.DispatcherTimer
+            // Capture completion/icon work can keep Normal queued while the panel
+            // is concealed. Poll/slide admission must still advance to its first
+            // visible pixel; settled idle remains 100 ms and game sleep stops it.
+            _frameTimer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Send)
             {
                 Interval = FrameInterval,
             };
@@ -1395,6 +1405,11 @@ public partial class DockWindow : GlassWindow
         var target = _autoHide.State == AutoHideState.Hidden
             ? (double)_fullyHiddenOffsetPixels
             : 0.0;
+
+        // Admit the reveal intent before preparation starts the native owner.
+        // Waiting for optical visibility lets a foreground-policy tick put that
+        // new owner back to sleep while the panel is still crossing the edge.
+        NotifyPerformanceSurfaceVisibility();
 
         // Prepare a complete material before the first pixels slide back into view.
         if (target == 0 && _backgroundCaptureSleeping) SetBackgroundCaptureSleeping(false);

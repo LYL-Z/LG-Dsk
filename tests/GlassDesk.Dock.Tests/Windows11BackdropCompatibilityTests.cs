@@ -85,6 +85,113 @@ public sealed class Windows11BackdropCompatibilityTests(ITestOutputHelper output
     }
 
     [Fact]
+    public void WindowBoundsChangeKeepsTheLiveVisualAndStillAdvancesTheCaptureBarrier()
+    {
+        if (GlassDesk.Platform.WindowsCapabilities.BuildNumber != 26100) return;
+        using var fixture = new Fixture();
+        StaTest.Run(() =>
+        {
+            SetThreadDpiAwarenessContext(-4);
+            using var capture = CreateCarrierCapture();
+            Read(typeof(SharedDesktopSceneCapture), capture, frame => Is(frame, 100, 80, 255, 0, 0));
+            var visualField = typeof(SharedDesktopSceneCapture).GetField("visual", BindingFlags.NonPublic | BindingFlags.Instance)!;
+            var visual = visualField.GetValue(capture);
+            var revision = capture.SceneRevision;
+            fixture.Send("move");
+            Assert.True(capture.UpdateExclusions());
+            Assert.True(capture.SceneRevision > revision);
+            Assert.Equal(visual, visualField.GetValue(capture));
+            Read(typeof(SharedDesktopSceneCapture), capture,
+                frame => Is(frame, 100, 80, 0, 255, 0) && Is(frame, 170, 100, 255, 0, 0));
+            revision = capture.SceneRevision;
+            SetWindowPos(fixture.TopHandle, 0, 450, 280, 48, 48, 0x14);
+            Assert.True(capture.UpdateExclusions());
+            Assert.True(capture.SceneRevision > revision);
+            Assert.Equal(visual, visualField.GetValue(capture));
+            Read(typeof(SharedDesktopSceneCapture), capture,
+                frame => Is(frame, 170, 100, 255, 0, 0) && Is(frame, 220, 130, 0, 255, 0));
+            fixture.Send("hide");
+            Assert.True(capture.UpdateExclusions());
+            Assert.Equal(visual, visualField.GetValue(capture));
+            Read(typeof(SharedDesktopSceneCapture), capture, frame => Is(frame, 170, 100, 0, 255, 0));
+            fixture.Send("add");
+            Assert.True(capture.UpdateExclusions());
+            Assert.NotEqual(visual, visualField.GetValue(capture));
+            Read(typeof(SharedDesktopSceneCapture), capture, frame => Is(frame, 120, 96, 0, 255, 255));
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MaximizedWindowCaptureUsesTheExpandedBoundsAndRestoresWithoutStaleContent(bool initiallyMaximized)
+    {
+        if (GlassDesk.Platform.WindowsCapabilities.BuildNumber != 26100) return;
+        using var fixture = new Fixture();
+        StaTest.Run(() =>
+        {
+            SetThreadDpiAwarenessContext(-4);
+            if (initiallyMaximized) fixture.Send("maximize");
+            using var capture = CreateCarrierCapture();
+            if (initiallyMaximized)
+            {
+                Read(typeof(SharedDesktopSceneCapture), capture, frame => Is(frame, 20, 20, 255, 0, 0));
+                fixture.Send("restore");
+            }
+            Read(typeof(SharedDesktopSceneCapture), capture, frame => Is(frame, 20, 20, 0, 255, 0));
+            for (var i = 0; i < 4; i++)
+            {
+                fixture.Send("maximize");
+                Read(typeof(SharedDesktopSceneCapture), capture, frame => Is(frame, 20, 20, 255, 0, 0));
+                fixture.Send("restore");
+                Read(typeof(SharedDesktopSceneCapture), capture, frame => Is(frame, 20, 20, 0, 255, 0));
+            }
+        });
+    }
+
+    [Fact]
+    public void MaximizeAndRestoreRebindTheForeignCompositionWhileOrdinaryMovesStayLive()
+    {
+        if (GlassDesk.Platform.WindowsCapabilities.BuildNumber != 26100) return;
+        using var fixture = new Fixture();
+        StaTest.Run(() =>
+        {
+            SetThreadDpiAwarenessContext(-4);
+            using var capture = CreateCarrierCapture();
+            Read(typeof(SharedDesktopSceneCapture), capture, frame => Is(frame, 20, 20, 0, 255, 0));
+            var visualField = typeof(SharedDesktopSceneCapture).GetField("visual", BindingFlags.NonPublic | BindingFlags.Instance)!;
+            var normalVisual = visualField.GetValue(capture);
+            fixture.Send("maximize");
+            Assert.True(capture.UpdateExclusions());
+            Assert.NotEqual(normalVisual, visualField.GetValue(capture));
+            Read(typeof(SharedDesktopSceneCapture), capture, frame => Is(frame, 20, 20, 255, 0, 0));
+            var maximizedVisual = visualField.GetValue(capture);
+            fixture.Send("restore");
+            Assert.True(capture.UpdateExclusions());
+            Assert.NotEqual(maximizedVisual, visualField.GetValue(capture));
+            Read(typeof(SharedDesktopSceneCapture), capture, frame => Is(frame, 20, 20, 0, 255, 0));
+        });
+    }
+
+    [Fact]
+    public void NativeLiveVisualStopsPaintingAClosedForeignWindowWithoutRecommittingItsExclusions()
+    {
+        if (GlassDesk.Platform.WindowsCapabilities.BuildNumber != 26100) return;
+        using var fixture = new Fixture();
+        StaTest.Run(() =>
+        {
+            SetThreadDpiAwarenessContext(-4);
+            using var capture = CreateCarrierCapture();
+            Read(typeof(SharedDesktopSceneCapture), capture, frame => Is(frame, 100, 80, 255, 0, 0));
+            // Diagnostic only: establish whether DWM itself tracks foreign HWND
+            // changes before changing the production scene-rebuild policy.
+            capture.DiagnosticFreezeExclusions = true;
+            fixture.Send("close");
+            Read(typeof(SharedDesktopSceneCapture), capture, frame => Is(frame, 120, 96, 0, 255, 0));
+        });
+    }
+
+    [Fact]
     public void CrashedNativeWorkerFallsBackWithoutTerminatingTheCaller()
     {
         var type = typeof(SharedBackdropFeed).Assembly.GetType("RecoveringDesktopSceneCapture");

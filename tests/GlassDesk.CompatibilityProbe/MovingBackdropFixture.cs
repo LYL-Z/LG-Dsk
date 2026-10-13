@@ -11,12 +11,13 @@ using GlassDesk.Platform.Displays;
 // must exclude its own launcher windows but still capture this ordinary window.
 internal static class MovingBackdropFixture
 {
-    internal static int Run(string readyPath)
+    internal static int Run(string readyPath, bool coverWorkArea = true)
     {
         var display = DisplayService.Primary()!;
         var canvas = new Canvas { Background = new SolidColorBrush(Color.FromRgb(42, 91, 133)) };
         var width = display.WorkArea.Width / display.ScaleFactor;
         var height = display.WorkArea.Height / display.ScaleFactor;
+        if (!coverWorkArea) { width = Math.Min(width, 900); height = 220; }
         for (var i = 0; i < 5; i++)
         {
             var transform = new TranslateTransform();
@@ -27,7 +28,9 @@ internal static class MovingBackdropFixture
                 TimeSpan.FromSeconds(2)) { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever });
         }
         var window = new Window { Content = canvas, Width = width, Height = height,
-            Left = display.WorkArea.X / display.ScaleFactor, Top = display.WorkArea.Y / display.ScaleFactor,
+            Left = coverWorkArea ? display.WorkArea.X / display.ScaleFactor
+                : display.WorkArea.X / display.ScaleFactor + (display.WorkArea.Width / display.ScaleFactor - width) / 2,
+            Top = coverWorkArea ? display.WorkArea.Y / display.ScaleFactor : display.WorkArea.Bottom / display.ScaleFactor - height - 4,
             WindowStyle = WindowStyle.None, ResizeMode = ResizeMode.NoResize, ShowActivated = false,
             ShowInTaskbar = false, Title = "GlassDesk controlled moving background" };
         var application = new Application();

@@ -137,6 +137,12 @@ public sealed class ThemeService : IDisposable
         {
             if (!_disposed)
             {
+                // Shell icon visibility also sends General notifications. Broadcast
+                // only a changed resolved palette; otherwise every glass surface
+                // unnecessarily discards its completed desktop material.
+                var next = ResolvePalette(Appearance);
+                if (Palette.IsDark == next.IsDark && Palette.Accent == next.Accent
+                    && Palette.FallbackPanelBackground == next.FallbackPanelBackground) return;
                 Refresh();
             }
         });

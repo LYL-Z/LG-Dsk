@@ -182,6 +182,19 @@ internal sealed unsafe class SharedDesktopSceneCapture : IDesktopSceneCapture
         _trace?.Invoke(new("SceneSnapshot","Completed",System.Diagnostics.Stopwatch.GetTimestamp(),EndTicks:snapshotStart));
         if(_lastExcluded is not null && _lastExcluded.AsSpan().SequenceEqual(excluded)
             && _lastMembers is not null && _lastMembers.AsSpan().SequenceEqual(snapshot.Members)) return false;
+        if (_lastExcluded is not null && _lastExcluded.AsSpan().SequenceEqual(excluded)
+            && _lastMembers is not null && CanFollowLiveWindows(_lastMembers, snapshot.Members))
+        {
+            // This live shared visual follows the same HWNDs' DWM transforms.
+            // Replacing it for every bounds change blocks acquisition needlessly.
+            // Hidden/closed HWNDs also stop contributing to this live visual.
+            // Track every removal/bounds change and retire pre-change frames;
+            // maximize/restore can replace a foreign redirected surface while keeping
+            // its HWND. Rebind those transitions, as well as additions/z-order/exclusions.
+            _lastMembers = snapshot.Members;
+            RecordExclusions(excluded);
+            return true;
+        }
         if(_trace is not null && _lastExcluded is not null)
         {
             var reason="OwnHandles";SceneWindow changedWindow=default;
@@ -205,6 +218,19 @@ internal sealed unsafe class SharedDesktopSceneCapture : IDesktopSceneCapture
         return true;
     }
     internal void ReleaseReadbackBuffers() => _capture?.ReleaseReadbackBuffers();
+    private static bool CanFollowLiveWindows(SceneWindow[] previous, SceneWindow[] current)
+    {
+        var index = 0;
+        foreach (var window in current)
+        {
+            while (index < previous.Length && (previous[index].Handle != window.Handle
+                || previous[index].ProcessId != window.ProcessId || previous[index].Visible != window.Visible)) index++;
+            if (index == previous.Length) return false;
+            if (previous[index].Maximized != window.Maximized) return false;
+            index++;
+        }
+        return true;
+    }
     private (nint[] Excluded,SceneWindow[] Members) WindowSnapshot()
     {
         var exclusions=new List<nint>();
@@ -222,7 +248,7 @@ internal sealed unsafe class SharedDesktopSceneCapture : IDesktopSceneCapture
                 && rect.Right>_region.X && rect.Bottom>_region.Y)
                 // Hidden pointer helpers and offscreen windows cannot contribute pixels.
                 // Rebuilding the shared visual for their motion retires valid live frames.
-                members.Add(new(hwnd,pid,rect.Left,rect.Top,rect.Right,rect.Bottom,true));
+                members.Add(new(hwnd,pid,rect.Left,rect.Top,rect.Right,rect.Bottom,true,IsZoomed(hwnd)));
             return true;
         },0))
             throw new InvalidOperationException("Own-process HWND enumeration failed.");
@@ -270,7 +296,7 @@ internal sealed unsafe class SharedDesktopSceneCapture : IDesktopSceneCapture
     }
     [StructLayout(LayoutKind.Sequential)] private struct ThumbnailProperties
     {public uint Flags;public Rect Destination,Source;public byte Opacity;public int Visible,ClientOnly;}
-    private readonly record struct SceneWindow(nint Handle,uint ProcessId,int Left,int Top,int Right,int Bottom,bool Visible);
+    private readonly record struct SceneWindow(nint Handle,uint ProcessId,int Left,int Top,int Right,int Bottom,bool Visible,bool Maximized);
     [StructLayout(LayoutKind.Sequential)] private struct Size {public int Width,Height;}
     [StructLayout(LayoutKind.Sequential)] private struct CompositionAttribute {public int Attribute;public nint Data;public nuint Size;}
     private delegate bool EnumWindowProc(nint hwnd,nint parameter);
@@ -288,6 +314,7 @@ internal sealed unsafe class SharedDesktopSceneCapture : IDesktopSceneCapture
     [DllImport("user32.dll")] private static extern bool GetWindowRect(nint hwnd,out Rect rect);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(nint hwnd);
     [DllImport("user32.dll")] private static extern bool IsIconic(nint hwnd);
+    [DllImport("user32.dll")] private static extern bool IsZoomed(nint hwnd);
     [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(nint hwnd,int attribute,out int value,int size);
     [DllImport("user32.dll",CharSet=CharSet.Unicode)] private static extern int GetClassName(nint hwnd,System.Text.StringBuilder text,int capacity);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint hwnd,out uint processId);

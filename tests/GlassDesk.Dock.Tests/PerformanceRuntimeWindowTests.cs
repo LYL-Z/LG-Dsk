@@ -11,6 +11,39 @@ namespace GlassDesk.Dock.Tests;
 public sealed class PerformanceRuntimeWindowTests
 {
     [Fact]
+    public void DockRevealClockIsNotStarvedByContinuousNormalPriorityWork()
+    {
+        StaTest.Run(() =>
+        {
+            var window = new DockWindow();
+            window.SetBackgroundCaptureSleeping(true);
+            var timer = (DispatcherTimer)typeof(DockWindow).GetField("_frameTimer", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+            var frame = new DispatcherFrame();
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
+            var stopped = false;
+            var tickMs = double.PositiveInfinity;
+            EventHandler observe = (_, _) => { tickMs = elapsed.Elapsed.TotalMilliseconds; stopped = true; frame.Continue = false; };
+            void BusyQueue()
+            {
+                if (stopped || elapsed.ElapsedMilliseconds >= 300) return;
+                var work = System.Diagnostics.Stopwatch.GetTimestamp();
+                while (System.Diagnostics.Stopwatch.GetElapsedTime(work).TotalMilliseconds < .3) Thread.SpinWait(32);
+                Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Normal, (Action)BusyQueue);
+            }
+            var safety = new DispatcherTimer(DispatcherPriority.Send) { Interval = TimeSpan.FromMilliseconds(600) };
+            safety.Tick += (_, _) => { safety.Stop(); frame.Continue = false; };
+            try
+            {
+                timer.Stop(); timer.Tick += observe; timer.Start(); safety.Start();
+                Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Normal, (Action)BusyQueue);
+                Dispatcher.PushFrame(frame);
+                Assert.True(tickMs < 180, $"Dock reveal polling stalled behind ordinary UI work for {tickMs:F1} ms.");
+            }
+            finally { stopped = true; safety.Stop(); timer.Tick -= observe; window.Close(); }
+        });
+    }
+
+    [Fact]
     public void NormalHiddenCaptureSleepRetainsPassiveRevealDetection()
     {
         StaTest.Run(() =>

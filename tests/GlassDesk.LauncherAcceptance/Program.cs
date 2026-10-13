@@ -29,6 +29,7 @@ internal static partial class Program
         if (GlassDesk.UI.BackdropCaptureWorker.RunIfRequested(args, out var workerExit)) return workerExit;
         if (args.Contains("--appearance-customization")) return VerifyAppearanceCustomization(args);
         if (args.Contains("--dock-builtin-entries")) return VerifyDockBuiltinEntries(args);
+        if (args.Contains("--desktop-icon-continuity")) return VerifyDockBuiltinEntries(args);
         if (args.Contains("--fullscreen-fixture")) return RunPerformanceFullscreenFixture(args);
         if (args.Contains("--full-host-performance")) return VerifyFullHostPerformance(args);
         if (args.Contains("--full-host-input")) return VerifyFullHostInput(args);

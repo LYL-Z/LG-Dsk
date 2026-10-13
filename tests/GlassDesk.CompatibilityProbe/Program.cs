@@ -16,6 +16,22 @@ internal static class CompatibilityProbe
     private static int Main(string[] args)
     {
         if (args.Length >= 2 && args[0] == "--capture-protocol-fixture") return CaptureProtocolFixture.Run(args[1]);
+        if (args.Length == 7 && args[0] == "--compare-live-region")
+        {
+            SetThreadDpiAwarenessContext(-4);
+            var parentId = int.Parse(args[1]);
+            var region = new ScreenRect(int.Parse(args[2]), int.Parse(args[3]), int.Parse(args[4]), int.Parse(args[5]));
+            using var capture = new SharedDesktopSceneCapture(region, isolatedParentProcess: parentId);
+            var clock = Stopwatch.StartNew();
+            var index = 0;
+            while (clock.Elapsed < TimeSpan.FromSeconds(3))
+            {
+                var frame = capture.TryRead(TimeSpan.FromMilliseconds(16));
+                if (frame is not null && index++ % 20 == 0) Save(frame, args[6] + "-" + index + ".png");
+                global::Program.Pump(TimeSpan.FromMilliseconds(10));
+            }
+            return 0;
+        }
         if (GlassDesk.UI.BackdropCaptureWorker.RunIfRequested(args, out var workerExit)) return workerExit;
         if (args.Length == 1 && args[0] == "--wallpaper-metadata")
         {
@@ -30,6 +46,8 @@ internal static class CompatibilityProbe
         }
         if (args.Length == 2 && args[0] == "--moving-backdrop-fixture")
             return MovingBackdropFixture.Run(args[1]);
+        if (args.Length == 2 && args[0] == "--desktop-transition-fixture")
+            return MovingBackdropFixture.Run(args[1], coverWorkArea: false);
         if (args.Length == 3 && args[0] == "capture-window")
         {
             SetThreadDpiAwarenessContext(-4);
@@ -50,6 +68,7 @@ internal static class CompatibilityProbe
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         var bottom = Window(Colors.Lime, 300, 200, 240, 160);
         var top = Window(Colors.Blue, 360, 240, 120, 80);
+        Window? added = null;
         bottom.Show(); top.Show();
         SetWindowPos(new WindowInteropHelper(bottom).Handle, -1, 300, 200, 240, 160, 0x10);
         SetWindowPos(new WindowInteropHelper(top).Handle, -1, 360, 240, 120, 80, 0x10);
@@ -69,7 +88,14 @@ internal static class CompatibilityProbe
             {
                 case "red": bottom.Background = Brushes.Red; break;
                 case "hide": top.Hide(); break;
+                case "close": top.Close(); break;
                 case "move": SetWindowPos(new WindowInteropHelper(top).Handle, -1, 450, 280, 120, 80, 0x10); break;
+                case "maximize": top.WindowState = WindowState.Maximized; break;
+                case "restore": top.WindowState = WindowState.Normal; break;
+                case "add":
+                    added = Window(Colors.Yellow, 400, 280, 64, 32); added.Show();
+                    SetWindowPos(new WindowInteropHelper(added).Handle, -1, 400, 280, 64, 32, 0x10); break;
+                case "remove": added?.Close(); added = null; break;
                 case "exit": app.Shutdown(); break;
             }
             File.WriteAllText(Path.Combine(root, "ack.txt"), command);

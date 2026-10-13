@@ -8,10 +8,14 @@ public partial class DockWindow
     private bool _performanceSleepRequested, _performanceSleeping;
     private bool _showAfterPerformanceSleep, _tilesDirty;
     private bool _lastPerformanceSurfaceVisible;
+    private bool _lastPerformanceCaptureRequested;
     private bool _backgroundCaptureSleeping;
 
     public bool IsPerformanceSleeping => _performanceSleeping;
     public bool IsPerformanceSurfaceVisible => IsVisible && IsOpticalSurfaceVisible && !_performanceSleeping;
+    /// <summary>Keep wake acquisition admitted before the first slide pixels become visible.</summary>
+    public bool IsPerformanceCaptureRequested => IsVisible && !_performanceSleepRequested
+        && (IsPerformanceSurfaceVisible || _autoHide?.State is AutoHideState.Shown or AutoHideState.WaitingToHide);
     public event EventHandler? PerformanceSurfaceVisibilityChanged;
 
     /// <summary>Ordinary obscured idle releases capture but retains the existing pointer reveal detector.</summary>
@@ -93,8 +97,10 @@ public partial class DockWindow
     private void NotifyPerformanceSurfaceVisibility()
     {
         var visible = IsPerformanceSurfaceVisible;
-        if (_lastPerformanceSurfaceVisible == visible) return;
+        var requested = IsPerformanceCaptureRequested;
+        if (_lastPerformanceSurfaceVisible == visible && _lastPerformanceCaptureRequested == requested) return;
         _lastPerformanceSurfaceVisible = visible;
+        _lastPerformanceCaptureRequested = requested;
         PerformanceSurfaceVisibilityChanged?.Invoke(this, EventArgs.Empty);
     }
 }

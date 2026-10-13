@@ -34,6 +34,7 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
     private bool _lastRenderMaterialReady;
     private long _lifecycleGeneration;
     private long _lastCaptureSequence, _lastCaptureGeneration;
+    private long _revealCaptureUntil;
     private int _renderFrameSignals;
     private readonly TransitionGlassLayer _transitionLayer = new();
     private readonly TransitionGlassLayer _compatibilityLayer = new();
@@ -182,6 +183,7 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
             UpdateRenderClock();
             if (!IsVisible)
             {
+                _revealCaptureUntil = 0;
                 // Keep material and suspend readback; the compatible session stays warm
                 // while live geometry decides whether the previous mask fits.
                 _worker.Invalidate(); _worker.ClearCachedBuffers(); _lastSource = null; _background.Suspend();
@@ -209,11 +211,33 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         InvalidateVisual();
     }
 
+    /// <summary>A fully clipped panel must reacquire content, even when foreign HWNDs are unchanged.</summary>
+    public void RetireConcealedMaterial()
+    {
+        ++_lifecycleGeneration;
+        _worker.Invalidate(); _worker.ClearCachedBuffers();
+        _lastSource = null; _lastCaptureSequence = _lastCaptureGeneration = 0;
+        _frame = null; _frameScene = null; _materialStamp = null;
+        _transitionBackdrop = null; _transitionBackdropScene = null;
+        _compatibilityBackdrop = null; _compatibilityStamp = null;
+        _compatibilityIsDesktopSnapshot = false; _compatibilityScene = null;
+        _handoffStarted = _materialRetentionUntil = _revealCaptureUntil = 0;
+        _wallpaperCancellation?.Cancel(); _wallpaperCancellation = null;
+        _wallpaperPreparationPending = false;
+        _background.Suspend(); _timer.Stop(); StopRenderClock(); CancelQueuedRefresh();
+        _transitionLayer.SetBackdrop(null); _transitionLayer.Opacity = 0;
+        _compatibilityLayer.SetBackdrop(null); _compatibilityLayer.Opacity = 0;
+        _firstVisibleRenderMaterialReady = null; _firstVisibleMaterialSource = null;
+        BackdropSource = GlassBackdropSource.Transparent;
+        InvalidateVisual();
+    }
+
     /// <summary>Retire capture, optical work and large presentation resources until a fresh reveal.</summary>
     public void SetPerformanceSleeping(bool sleeping)
     {
         if (_performanceSleeping == sleeping) return;
         _performanceSleeping = sleeping;
+        _revealCaptureUntil = 0;
         ++_lifecycleGeneration;
         _worker.Invalidate(); _worker.ClearCachedBuffers();
         _lastSource = null;
@@ -276,6 +300,7 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         _worker.ClearCachedBuffers();
         StopRenderClock();
         CancelQueuedRefresh(); ++_lifecycleGeneration;
+        _revealCaptureUntil = 0;
         _wallpaperCancellation?.Cancel(); _wallpaperCancellation = null;
         _timer.Stop(); _background.Dispose(); _frame = null; _lastSource = null;
         _transitionBackdrop = null;
@@ -322,10 +347,22 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
             _worker.Invalidate();
             _worker.ClearCachedBuffers();
             SetTimerInterval(TimeSpan.FromMilliseconds(200));
-            _background.Suspend(); _lastSource = null;
-            _timer.Stop(); StopRenderClock();
+            _lastSource = null;
+            // Reveal preparation starts acquisition before the first slide pixel.
+            // The queued inactive tick must not suspend that very same request.
+            // A bounded watchdog retires preparation if the reveal is cancelled.
+            if (_revealCaptureUntil > Stopwatch.GetTimestamp())
+            {
+                _timer.Interval = TimeSpan.FromMilliseconds(100); _timer.Start();
+            }
+            else
+            {
+                _revealCaptureUntil = 0; _background.Suspend(); _timer.Stop();
+            }
+            StopRenderClock();
             return;
         }
+        _revealCaptureUntil = 0;
         if (owner.PrimaryDisplaySession is { IsAvailable: false })
         {
             _worker.Invalidate();
@@ -451,6 +488,8 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
             Math.Max(1, (int)Math.Floor(region.Height * scale)), radius,
             owner.SurfaceMode == GlassSurfaceMode.OpticalGlass);
         var capturedScene = _backdropScene;
+        var capturedStamp = ReadMaterialStamp();
+        var capturedSourceTicks = _background.LastCaptureTiming?.SourceTicks ?? 0;
         using var background = capturedBackground is null ? null
             : _background.ExtendCapturedFrame(capturedBackground, region, requestedRegion, width, height);
         var source = background?.Pixels;
@@ -504,7 +543,8 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
                 || !owner.IsVisible || !IsVisible || IsBackdropActive?.Invoke() == false
                 || owner.PrimaryDisplaySession is { IsAvailable: false }
                 || ThemeService.Current?.UseOpaquePanels == true
-                || backgroundClarity != BackgroundClarity || capturedScene is null || !capturedScene.Equals(_backdropScene)) return;
+                || backgroundClarity != BackgroundClarity || capturedScene is null
+                || !CanCommitCapturedScene(capturedScene, capturedStamp, capturedSourceTicks)) return;
             var refracted = result.Pixels;
             if (_compatibilityBackdrop is not null && _handoffStarted == 0) _handoffStarted = Stopwatch.GetTimestamp();
             if (transitionBackdrop)
@@ -948,9 +988,16 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
     {
         if (_performanceSleeping || Window.GetWindow(this) is not GlassWindow owner
             || owner.SurfaceMode != GlassSurfaceMode.OpticalGlass) return;
-        var margin = (int)Math.Ceiling(48 * dpi / 96);
-        var requested = new PixelRect(host.X - margin, host.Y - margin,
-            host.Width + margin * 2, host.Height + margin * 2);
+        var scaleFactor = dpi / 96;
+        var bounds = _transitionCaptureBounds ?? new Rect(0, 0, host.Width / scaleFactor, host.Height / scaleFactor);
+        // Use the full fixed slide/morph capture bounds, not just the resting
+        // panel. Otherwise the visible frame changes resolution/generation and
+        // throws away the prewarmed snapshot on wide Docks.
+        var left = (int)Math.Floor(host.X + (bounds.Left - 48) * scaleFactor);
+        var top = (int)Math.Floor(host.Y + (bounds.Top - 48) * scaleFactor);
+        var right = (int)Math.Ceiling(host.X + (bounds.Right + 48) * scaleFactor);
+        var bottom = (int)Math.Ceiling(host.Y + (bounds.Bottom + 48) * scaleFactor);
+        var requested = new PixelRect(left, top, right - left, bottom - top);
         var display = owner.PrimaryDisplaySession?.Display ?? DisplayService.Primary();
         if (display is null) return;
         var region = ClipRegion(requested, display.Bounds);
@@ -963,6 +1010,8 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         // Dispatcher. The first visible render uses this same crop and sample size.
         using var pending = _background.Capture(region, Math.Max(1, (int)Math.Floor(region.Width * scale)),
             Math.Max(1, (int)Math.Floor(region.Height * scale)), _panelRadius, true);
+        _revealCaptureUntil = Stopwatch.GetTimestamp() + Stopwatch.Frequency;
+        _timer.Interval = TimeSpan.FromMilliseconds(100); _timer.Start();
     }
 
     private void PrepareWallpaperMaterial(MaterialStamp stamp, Rect bounds)
@@ -1024,6 +1073,19 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         return true;
     }
 
+    private bool CanCommitCapturedScene(GlassBackdropScene? capturedScene, MaterialStamp? capturedStamp, long sourceTicks)
+    {
+        if (capturedScene is null || capturedStamp != ReadMaterialStamp()) return false;
+        if (capturedScene.Equals(_backdropScene)) return true;
+        // The acquired snapshot has already passed native exclusion and scene
+        // barriers. An external window moving during CPU composition does not
+        // invalidate its coordinates. Keep its real scene/timestamp and require
+        // the same 120 ms freshness ceiling used by the capture consumer.
+        var age = Stopwatch.GetTimestamp() - sourceTicks;
+        return _backdropScene?.CanHandoffMaterialFrom(capturedScene) == true && sourceTicks > 0
+            && age >= 0 && age <= Stopwatch.Frequency * 120 / 1000;
+    }
+
     private void EnsureBackdropScene(bool revealing = false)
     {
         var scene = ReadBackdropScene();
@@ -1041,24 +1103,35 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         }
         if (_frame is not null) _frameScene ??= _backdropScene;
         if (_transitionBackdrop is not null) _transitionBackdropScene ??= _backdropScene;
+        var continuingVisibleCapture = !revealing && Window.GetWindow(this)?.IsVisible == true && IsVisible
+            && IsBackdropActive?.Invoke() != false && scene?.CanHandoffMaterialFrom(_backdropScene) == true;
         if (scene is null || !scene.Equals(_backdropScene))
         {
             _backdropScene = scene;
-            _worker.Invalidate();
-            _background.Suspend();
+            // The native producer already tracks external HWND scene revisions.
+            // Cancelling it and the CPU stage on every move starves both stages.
+            // Unknown scenes, reveal and recovery still require a cold boundary.
+            if (!continuingVisibleCapture)
+            {
+                _worker.Invalidate();
+                _revealCaptureUntil = 0;
+                _background.Suspend();
+            }
             _lastSource = null;
         }
-        // Fresh acquisition still follows every scene boundary. While visible, an
-        // added overlay or z-order change can retain material from windows that
-        // remain alive at the same bounds. Transient transparent tool overlays
-        // may disappear during input. Both cases get at most 100 ms to replace
-        // material; ordinary window removal/movement and recovery clear at once.
+        // Fresh acquisition still follows every scene boundary. A continuously
+        // visible surface keeps its complete, self-excluded material while the
+        // replacement is acquired and composed, including window close/minimize.
+        // The existing 100 ms ceiling is not extended by repeated scene changes;
+        // revealing, unknown scenes, geometry changes and recovery never reuse it.
         var discarded = false;
         bool Reusable(GlassBackdropScene? materialScene)
         {
             if (scene is null) return false;
             if (scene.Equals(materialScene)) return true;
-            if (revealing || !scene.CanRetainMaterialFrom(materialScene)) return false;
+            var visibleHandoff = Window.GetWindow(this)?.IsVisible == true && IsVisible
+                && IsBackdropActive?.Invoke() != false && scene.CanHandoffMaterialFrom(materialScene);
+            if (revealing || !scene.CanRetainMaterialFrom(materialScene) && !visibleHandoff) return false;
             var now = Stopwatch.GetTimestamp();
             if (_materialRetentionUntil == 0) _materialRetentionUntil = now + Stopwatch.Frequency / 10;
             return now < _materialRetentionUntil;
@@ -1073,7 +1146,10 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         }
         if (!discarded) return;
         _compatibilityBackdrop = null; _compatibilityStamp = null; _handoffStarted = 0;
-        _worker.Invalidate(); _lastSource = null;
+        // Expiring the displayed texture does not cancel a newer in-flight frame.
+        // Its source age, recovery generation and capture pose are checked on commit.
+        if (!continuingVisibleCapture) _worker.Invalidate();
+        _lastSource = null;
         if (_frame is null && _transitionBackdrop is null) BackdropSource = GlassBackdropSource.Transparent;
         UpdateTransitionLayer(); InvalidateVisual();
     }

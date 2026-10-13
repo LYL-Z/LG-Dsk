@@ -14,11 +14,67 @@ using GlassDesk.UI.Controls;
 // render the WPF visual tree and cannot establish physical display timing.
 internal static class FirstFrameRecording
 {
-    internal static void Record(Window window, Action reveal, string outputDirectory, TimeSpan duration)
+    // A bright controlled desktop/fixture is required for this diagnostic: this
+    // threshold is never a production capture filter or a general wallpaper test.
+    internal sealed class DockContinuityRecording : IDisposable
+    {
+        private readonly ManualResetEventSlim _stop = new();
+        private readonly Thread _thread;
+        private readonly List<object> _samples = [];
+        private readonly string _output;
+        private bool _disposed;
+        internal int DarkSamples { get; private set; }
+        internal int WaitingBodySamples { get; private set; }
+        internal int SampleCount => _samples.Count;
+        internal string? Failure { get; private set; }
+        internal DockContinuityRecording(PixelRect region, Func<string> phase, string output)
+        {
+            _output = output; Directory.CreateDirectory(output);
+            _thread = new Thread(() =>
+            {
+                try
+                {
+                    using var desktop = new DesktopFrames(region);
+                    do
+                    {
+                        var ticks = Stopwatch.GetTimestamp();
+                        var currentPhase = phase();
+                        var mean = desktop.ReadMaterialBand();
+                        if (mean is null) throw new InvalidOperationException("Desktop band capture failed.");
+                        // Calibration on this controlled fixture: the invalidated
+                        // waiting body is 50.19, while live blue reflections can be
+                        // 52-65. Keep those darker legitimate frames for visual QA.
+                        var dark = mean < 65;
+                        var waitingBody = mean < 51;
+                        if (dark) DarkSamples++;
+                        if (waitingBody) WaitingBodySamples++;
+                        _samples.Add(new { ticks, phase = currentPhase, meanChannel = mean, dark, waitingBody });
+                        if (dark && DarkSamples <= 12 && desktop.Read() is { } image)
+                            SavePng(image, Path.Combine(output, "dark-" + DarkSamples + ".png"));
+                    } while (!_stop.Wait(TimeSpan.FromMilliseconds(1000d / 60)));
+                }
+                catch (Exception error) { Failure = error.ToString(); }
+            }) { IsBackground = true, Name = "GlassDesk composed Dock continuity recorder" };
+            _thread.SetApartmentState(ApartmentState.STA); _thread.Start();
+        }
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _stop.Set(); _thread.Join(); _stop.Dispose();
+            File.WriteAllText(Path.Combine(_output, "composed-dock-continuity.json"), JsonSerializer.Serialize(new
+            {
+                note = "Independent real-desktop GDI sampling, no affinity override. Bright controlled fixture only; no displayed FPS claim; sub-sample flashes can be missed.",
+                samples = SampleCount, darkSamples = DarkSamples, waitingBodySamples = WaitingBodySamples, failure = Failure, observations = _samples
+            }, new JsonSerializerOptions { WriteIndented = true }));
+        }
+    }
+
+    internal static void Record(Window window, Action reveal, string outputDirectory, TimeSpan duration, PixelRect? captureRegionPixels = null)
     {
         if (duration <= TimeSpan.Zero || duration > TimeSpan.FromSeconds(5)) throw new ArgumentOutOfRangeException(nameof(duration));
         Directory.CreateDirectory(outputDirectory);
-        var region = DisplayService.Primary()?.WorkArea ?? throw new InvalidOperationException("Primary display unavailable.");
+        var region = captureRegionPixels ?? DisplayService.Primary()?.WorkArea ?? throw new InvalidOperationException("Primary display unavailable.");
         var desktopImages = new List<(BitmapSource Image, long Ticks)>();
         var windowImages = new List<(BitmapSource Image, long Ticks)>();
         var observations = new List<object>();
@@ -148,6 +204,20 @@ internal static class FirstFrameRecording
             for (var i = 3; i < _pixels.Length; i += 4) _pixels[i] = 255;
             var bitmap = BitmapSource.Create(_width, _height, 96, 96, PixelFormats.Bgra32, null, _pixels, _width * 4);
             bitmap.Freeze(); return bitmap;
+        }
+        internal double? ReadMaterialBand()
+        {
+            if (!StretchBlt(_dc, 0, 0, _width, _height, _screen, _region.X, _region.Y, _region.Width, _region.Height, 0x40CC0020)) return null;
+            GdiFlush(); Marshal.Copy(_bits, _pixels, 0, _pixels.Length);
+            long total = 0; var count = 0;
+            // The upper body avoids every foreground icon and the outer shadow.
+            var y = Math.Clamp((int)(_height * .08), 0, _height - 1);
+            for (var x = (int)(_width * .55); x < (int)(_width * .88); x++)
+            {
+                var i = (y * _width + x) * 4;
+                total += _pixels[i] + _pixels[i + 1] + _pixels[i + 2]; count += 3;
+            }
+            return (double)total / Math.Max(1, count);
         }
         public void Dispose()
         {

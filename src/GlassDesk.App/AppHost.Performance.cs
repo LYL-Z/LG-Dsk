@@ -117,7 +117,7 @@ internal sealed partial class AppHost
             {
                 _performanceApplyPending = false;
                 var now = DateTimeOffset.UtcNow;
-                _performance.SetVisibleSurfaces(_dock?.IsPerformanceSurfaceVisible == true,
+                _performance.SetVisibleSurfaces(_dock?.IsPerformanceCaptureRequested == true,
                     _launcher?.IsVisible == true || _performanceActivationPending, now);
                 var state = _performance.State;
                 var sleeping = state == PerformanceState.Sleeping;
