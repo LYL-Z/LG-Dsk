@@ -22,3 +22,7 @@ Redistribution notices: docs/third-party/dotnet-10.0.12/
 
 Names and icons of applications imported by users are not bundled source assets.
 This project license does not grant rights to third-party trademarks.
+
+LG Dsk local derivative
+LG Dsk 1.4.0 is a local derivative based on the public GlassDesk 1.3.1 source snapshot and selected public release-note behaviors. Original GlassDesk copyright, Apache License 2.0 terms, and third-party notices above remain in force.
+The LG Dsk icon is a user-requested derivative design. Its warm terracotta rays are a visual accent inspired by the user's Claude-themed desktop; they are not an official Claude or Anthropic mark and do not imply affiliation.

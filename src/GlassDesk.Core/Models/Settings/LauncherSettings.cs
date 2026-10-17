@@ -22,7 +22,7 @@ public sealed class LauncherSettings
     /// 启动台一打开就把光标放进搜索框，键入即过滤，
     /// 不必再多点一下。
     /// </summary>
-    public bool FocusSearchOnOpen { get; set; } = true;
+    public bool FocusSearchOnOpen { get; set; }
 
     /// <summary>
     /// 再次打开时恢复上次停留的页面，关闭则总是从第一页开始。

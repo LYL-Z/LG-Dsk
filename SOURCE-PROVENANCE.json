@@ -1,10 +1,32 @@
 {
-  "product": "GlassDesk",
-  "version": "1.3.1",
+  "product": "LG Dsk",
+  "version": "1.4.0",
   "originalTag": "v1.3.1",
   "originalCommit": "55ae1b8ba2f229b95955675c9611f4b729d852fc",
   "originalRepository": "https://github.com/everlosttime/glassdesk",
   "exportMethod": "Complete src/tests plus required build configuration, tools and third-party notices from the private v1.3.1 source; public snapshot matches product version 1.3.1 and excludes private history and machine data",
   "license": "Apache-2.0",
-  "licenseAddedAtPublicExport": false
+  "licenseAddedAtPublicExport": false,
+  "customization": {
+    "derivedFromProduct": "GlassDesk",
+    "sourceRepository": "https://github.com/everlosttime/glassdesk-open-source",
+    "sourceSnapshotTag": "v1.3.1",
+    "sourceSnapshotCommit": "c825c9dad718f22900b24b255f73ddb4989d347d",
+    "releaseNotesRepository": "https://github.com/everlosttime/glassdesk-updates",
+    "upstreamV1_4_0SourcePublished": false,
+    "method": "Reconstructed selected behaviors from public release notes; not a source merge of upstream v1.4.0",
+    "changes": [
+      "LG Dsk product metadata and custom LG icon with a user-requested Claude-inspired derived terracotta accent",
+      "Hide the full Dock while a normal external application is foreground",
+      "On-demand running-application switcher on Ctrl+Alt+Space, with fullscreen suppression",
+      "500 ms launcher app-folder drag hover using the existing group model",
+      "Disable the upstream update feed and omit sponsorship UI"
+    ],
+    "notReconstructed": [
+      "Undocumented 1.3.7 private implementation",
+      "1.4.0 drag sensitivity and folder-extraction bug fixes whose implementation is not available in the public source",
+      "Current-user scheduled-task startup migration",
+      "Settings-window blank-area dragging"
+    ]
+  }
 }

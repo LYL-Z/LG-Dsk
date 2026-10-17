@@ -40,7 +40,7 @@ public partial class SettingsWindow
         InstallationStatus.Text = installationInfo.State switch
         {
             InstallationState.Portable => "当前程序以便携方式运行。退出后可自行删除程序文件夹；用户数据需在“备份与恢复”页单独管理。",
-            InstallationState.VerifiedInstalled => $"已核验此安装及卸载程序：{installationInfo.UninstallerPath}\n卸载程序不会删除 GlassDesk 用户数据。",
+            InstallationState.VerifiedInstalled => $"已核验此安装及卸载程序：{installationInfo.UninstallerPath}\n卸载程序不会删除 LG Dsk 用户数据。",
             _ => "安装登记不完整或与当前程序不匹配，已停用卸载入口。" + Environment.NewLine + installationInfo.Error,
         };
     }
@@ -142,7 +142,7 @@ public partial class SettingsWindow
             NextPageHotkeyBox.Text = HotkeyText.Format(current.Shortcuts.NextPage);
             PreviousPageHotkeyBox.Text = HotkeyText.Format(current.Shortcuts.PreviousPage);
             ToggleDesktopIconsHotkeyBox.Text = HotkeyText.Format(current.Shortcuts.ToggleDesktopIcons);
-            ToggleDockRevealLockHotkeyBox.Text = HotkeyText.Format(current.Shortcuts.ToggleDockRevealLock);
+            ToggleRunningAppSwitcherHotkeyBox.Text = HotkeyText.Format(current.Shortcuts.ToggleRunningAppSwitcher);
             InteractionSettingsStatus.Text = "快捷键录制完成后自动保存并应用。";
         }
         catch (Exception ex)
@@ -158,11 +158,11 @@ public partial class SettingsWindow
         if (!TryReadHotkey(ToggleLauncherHotkeyBox, out var toggle)
             || !TryReadHotkey(NextPageHotkeyBox, out var next) || !TryReadHotkey(PreviousPageHotkeyBox, out var previous)
             || !TryReadHotkey(ToggleDesktopIconsHotkeyBox, out var icons)
-            || !TryReadHotkey(ToggleDockRevealLockHotkeyBox, out var dockRevealLock)) return;
+            || !TryReadHotkey(ToggleRunningAppSwitcherHotkeyBox, out var appSwitcher)) return;
         var shortcuts = new ShortcutSettings
         {
             ToggleLauncher = toggle, HideLauncher = new(), NextPage = next, PreviousPage = previous,
-            ToggleDesktopIcons = icons, ToggleDockRevealLock = dockRevealLock,
+            ToggleDesktopIcons = icons, ToggleRunningAppSwitcher = appSwitcher,
         };
         var display = new DisplaySettings
         {
@@ -204,7 +204,7 @@ public partial class SettingsWindow
     public bool TryCaptureRegisteredHotkey(nint packedChord)
     {
         var recorder = new[] { ToggleLauncherHotkeyBox, NextPageHotkeyBox,
-            PreviousPageHotkeyBox, ToggleDesktopIconsHotkeyBox, ToggleDockRevealLockHotkeyBox }
+            PreviousPageHotkeyBox, ToggleDesktopIconsHotkeyBox, ToggleRunningAppSwitcherHotkeyBox }
             .FirstOrDefault(control => control.IsRecording && control.IsKeyboardFocusWithin);
         if (recorder is null) return false;
         var packed = unchecked((uint)packedChord.ToInt64());
@@ -260,7 +260,7 @@ public partial class SettingsWindow
     private void OnCreateBackupClick(object sender, RoutedEventArgs e)
     {
         if (_dataStore is null) { BackupStatus.Text = "设置数据尚未加载。"; return; }
-        var dialog = new OpenFolderDialog { Title = "选择 GlassDesk 备份保存文件夹", Multiselect = false };
+        var dialog = new OpenFolderDialog { Title = "选择 LG Dsk 备份保存文件夹", Multiselect = false };
         if (dialog.ShowDialog(this) != true) return;
         var result = _dataStore.Backup.BackupTo(dialog.FolderName);
         BackupStatus.Text = result.Succeeded
@@ -280,8 +280,8 @@ public partial class SettingsWindow
         var dataRoot = _dataStore.Paths.RootDirectory;
         var answer = MessageBox.Show(
             this,
-            $"将删除以下目录中的全部 GlassDesk 用户数据：\n\n{dataRoot}\n\n包括设置、应用库、布局、自定义图标、内部备份和日志。不会卸载程序、删除此目录之外的导入文件或备份，也不会更改登录启动项。建议先使用上方“创建备份”并把备份保存到此目录之外。\n\n确认后 GlassDesk 将停止并退出。要继续吗？",
-            "删除全部 GlassDesk 数据",
+            $"将删除以下目录中的全部 LG Dsk 用户数据：\n\n{dataRoot}\n\n包括设置、应用库、布局、自定义图标、内部备份和日志。不会卸载程序、删除此目录之外的导入文件或备份，也不会更改登录启动项。建议先使用上方“创建备份”并把备份保存到此目录之外。\n\n确认后 LG Dsk 将停止并退出。要继续吗？",
+            "删除全部 LG Dsk 数据",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning,
             MessageBoxResult.No);
@@ -304,8 +304,8 @@ public partial class SettingsWindow
 
         var answer = MessageBox.Show(
             this,
-            $"将启动已核验的 GlassDesk 卸载程序：\n\n{_installationInfo.UninstallerPath}\n\n卸载仅移除已安装的程序文件，不会删除 GlassDesk 用户数据。要继续吗？",
-            "卸载 GlassDesk",
+            $"将启动已核验的 LG Dsk 卸载程序：\n\n{_installationInfo.UninstallerPath}\n\n卸载仅移除已安装的程序文件，不会删除 LG Dsk 用户数据。要继续吗？",
+            "卸载 LG Dsk",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning,
             MessageBoxResult.No);
@@ -318,7 +318,7 @@ public partial class SettingsWindow
     private void OnRestoreBackupClick(object sender, RoutedEventArgs e)
     {
         if (_dataStore is null) { BackupStatus.Text = "设置数据尚未加载。"; return; }
-        var dialog = new OpenFolderDialog { Title = "选择 GlassDesk 备份文件夹", Multiselect = false };
+        var dialog = new OpenFolderDialog { Title = "选择 LG Dsk 备份文件夹", Multiselect = false };
         if (dialog.ShowDialog(this) != true) return;
         if (DataRestored is null)
         {
@@ -326,8 +326,8 @@ public partial class SettingsWindow
             return;
         }
         var answer = MessageBox.Show(this,
-            "恢复会用所选备份替换当前 GlassDesk 数据。系统会先保存当前数据副本。恢复后请重新启动 GlassDesk 以载入全部内容。要继续吗？",
-            "恢复 GlassDesk 备份", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            "恢复会用所选备份替换当前 LG Dsk 数据。系统会先保存当前数据副本。恢复后请重新启动 LG Dsk 以载入全部内容。要继续吗？",
+            "恢复 LG Dsk 备份", MessageBoxButton.YesNo, MessageBoxImage.Warning);
         if (answer != MessageBoxResult.Yes) return;
         var result = _dataStore.Backup.RestoreFrom(dialog.FolderName);
         if (!result.Succeeded)
@@ -335,7 +335,7 @@ public partial class SettingsWindow
             BackupStatus.Text = result.Error ?? "恢复未能完成。";
             return;
         }
-        BackupStatus.Text = $"已从备份恢复 {result.Files.Count} 个文件。当前数据的安全副本位于：{result.SafetyCopyDirectory}。请重新启动 GlassDesk。为避免写回恢复前的内存设置，本窗口的设置编辑已停用。";
+        BackupStatus.Text = $"已从备份恢复 {result.Files.Count} 个文件。当前数据的安全副本位于：{result.SafetyCopyDirectory}。请重新启动 LG Dsk。为避免写回恢复前的内存设置，本窗口的设置编辑已停用。";
         SettingsScroll.IsEnabled = false;
         SettingsPageList.IsEnabled = false;
         ResetPageButton.IsEnabled = false;

@@ -5,6 +5,25 @@ using GlassDesk.Platform.Displays;
 namespace GlassDesk.Platform.Shell;
 public static class ForegroundCoverage
 {
+    /// <summary>True when a normal window from another process owns the foreground.</summary>
+    public static bool IsExternalApplicationForeground()
+    {
+        nint hwnd = GetForegroundWindow();
+        if (hwnd == 0 || !IsWindowVisible(hwnd) || IsIconic(hwnd)) return false;
+        if (GetWindowThreadProcessId(hwnd, out uint pid) == 0 || pid == 0 || pid == Environment.ProcessId)
+            return false;
+
+        var name = new char[256];
+        var length = GetClassName(hwnd, name, name.Length);
+        if (length == 0) return false;
+        if (new string(name, 0, length) is "Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd")
+            return false;
+        if (DwmGetWindowAttribute(hwnd, 14, out int cloaked, sizeof(int)) == 0 && cloaked != 0)
+            return false;
+
+        return true;
+    }
+
     public static bool IsCovered(PixelRect target)
     {
         if (target.Width <= 0 || target.Height <= 0) return false;

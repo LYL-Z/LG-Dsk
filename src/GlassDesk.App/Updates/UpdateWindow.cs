@@ -22,7 +22,7 @@ internal sealed class UpdateWindow : Window, IDisposable
     public UpdateWindow(UpdateRelease release, bool canInstall, Func<IProgress<int>, CancellationToken, Task> install)
     {
         _install = install;
-        Title = "GlassDesk 更新";
+        Title = "LG Dsk 更新";
         Width = 520; Height = 480; MinWidth = 430; MinHeight = 350;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Background = new SolidColorBrush(Color.FromRgb(23, 26, 33));

@@ -1,4 +1,4 @@
-; User-scope x64 installer for the local GlassDesk candidate.
+; User-scope x64 installer for the local LG Dsk candidate.
 #ifndef AppIdValue
   #error AppIdValue is required.
 #endif
@@ -21,11 +21,11 @@
 
 [Setup]
 AppId={#AppIdValue}
-AppName=GlassDesk
+AppName=LG Dsk
 AppVersion={#ProductVersion}
-AppVerName=GlassDesk {#ProductVersion}
+AppVerName=LG Dsk {#ProductVersion}
 DefaultDirName={localappdata}\Programs\GlassDesk
-DefaultGroupName=GlassDesk
+DefaultGroupName=LG Dsk
 DisableDirPage=no
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
@@ -36,11 +36,11 @@ UsePreviousAppDir=yes
 CloseApplications=yes
 RestartApplications=no
 MinVersion=10.0.22000
-UninstallDisplayName=GlassDesk
+UninstallDisplayName=LG Dsk
 UninstallDisplayIcon={app}\GlassDesk.exe
 SetupIconFile=..\src\GlassDesk.App\Assets\GlassDesk.ico
-AppPublisher=GlassDesk
-VersionInfoProductName=GlassDesk
+AppPublisher=LG Dsk
+VersionInfoProductName=LG Dsk
 VersionInfoProductVersion={#FileVersion}
 VersionInfoVersion={#FileVersion}
 VersionInfoTextVersion={#FileVersion}
@@ -61,8 +61,8 @@ Source: "{#StageDirectory}\*"; DestDir: "{app}"; Excludes: "Data\*"; Flags: igno
 Source: "{#StageDirectory}\GlassDesk.ico"; DestDir: "{app}"; DestName: "GlassDesk-{#ProductVersion}.ico"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\GlassDesk"; Filename: "{app}\GlassDesk.exe"; WorkingDir: "{app}"; IconFilename: "{app}\GlassDesk-{#ProductVersion}.ico"
-Name: "{autodesktop}\GlassDesk"; Filename: "{app}\GlassDesk.exe"; WorkingDir: "{app}"; IconFilename: "{app}\GlassDesk-{#ProductVersion}.ico"; Tasks: desktopicon
+Name: "{autoprograms}\LG Dsk"; Filename: "{app}\GlassDesk.exe"; WorkingDir: "{app}"; IconFilename: "{app}\GlassDesk-{#ProductVersion}.ico"
+Name: "{autodesktop}\LG Dsk"; Filename: "{app}\GlassDesk.exe"; WorkingDir: "{app}"; IconFilename: "{app}\GlassDesk-{#ProductVersion}.ico"; Tasks: desktopicon
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\{#AppIdValue}_is1"; ValueName: "InstallLocation"; ValueType: string; ValueData: "{app}"; Flags: uninsdeletevalue

@@ -8,9 +8,9 @@ public partial class SettingsWindow
 
     public void ShowUpdateStatus(string version, string status, bool checking = false)
     {
-        ProductVersionText.Text = "GlassDesk " + version;
+        ProductVersionText.Text = "LG Dsk " + version;
         UpdateStatusText.Text = status;
-        CheckUpdateButton.IsEnabled = !checking && !_userDataDeletionPending;
+        CheckUpdateButton.IsEnabled = false;
     }
 
     private void OnCheckUpdateClick(object sender, RoutedEventArgs e) =>

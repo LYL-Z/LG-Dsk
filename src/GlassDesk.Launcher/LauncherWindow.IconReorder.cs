@@ -27,6 +27,10 @@ public partial class LauncherWindow
     private TranslateTransform? _dragGhostMotion;
     private long _dragPreviewCommits;
     private double _lastDragPreviewMilliseconds;
+    private string? _folderHoverTargetId;
+    private DateTimeOffset _folderHoverStarted;
+    private bool _folderPreviewActive;
+    private static readonly TimeSpan FolderHoverDelay = TimeSpan.FromMilliseconds(500);
     private readonly Dictionary<Button, Point> _dragTileOffsets = new();
     private readonly Dictionary<Button, IconOffsetMotion> _iconOffsetMotions = new();
 
@@ -56,6 +60,9 @@ public partial class LauncherWindow
         _grabPoint = grabPoint;
         _previewIndex = _view.Page * _view.Capacity + TileGrid.Children.IndexOf(source);
         _previewExchange = false;
+        _folderHoverTargetId = null;
+        _folderHoverStarted = DateTimeOffset.MinValue;
+        _folderPreviewActive = false;
         _pagePreviewAfter = DateTimeOffset.MinValue;
         _edgePager.Reset();
         _dragTiles.Clear();
@@ -190,6 +197,11 @@ public partial class LauncherWindow
         var row = Math.Clamp((int)(point.Y / cellHeight), 0, _view.Rows - 1);
         var count = _dragOrigin.Pages.Sum(p => p.Slots.Count);
         var index = Math.Min(_view.Page * _view.Capacity + row * _view.Columns + column, count - 1);
+        var targetSlot = _dragOrigin.Pages.SelectMany(page => page.Slots).ElementAtOrDefault(index);
+        var targetId = targetSlot?.Kind == LauncherSlotKind.Group
+            ? targetSlot.Group?.Id
+            : targetSlot?.ItemId;
+        if (TryPreviewFolderDrop(targetSlot, targetId, exchange, index, snap)) return;
         if (index == _previewIndex && exchange == _previewExchange) return;
         // Crossing into a new cell needs a few pixels of intent, so boundary jitter cannot shuttle icons back and forth.
         if (!snap && _previewIndex >= 0 && index != _previewIndex)
@@ -203,6 +215,64 @@ public partial class LauncherWindow
         _dragEdit.Draft = LauncherLayoutEditor.PlaceAtSlot(_dragOrigin, _dragIconId, index, _view.Capacity, exchange);
         if (snap) StopPageSlide();
         RenderIconPreview();
+    }
+
+    private bool TryPreviewFolderDrop(LauncherSlot? targetSlot, string? targetId, bool exchange, int index, bool snap)
+    {
+        if (exchange || targetSlot is null || string.IsNullOrWhiteSpace(targetId)
+            || targetId == _dragIconId || _dragOrigin is null || _dragEdit is null || _dragIconId is null)
+        {
+            ClearFolderHover();
+            return false;
+        }
+
+        var draggedSlot = _dragOrigin.Pages.SelectMany(page => page.Slots).FirstOrDefault(slot =>
+            slot.Kind == LauncherSlotKind.Group ? slot.Group?.Id == _dragIconId : slot.ItemId == _dragIconId);
+        if (draggedSlot?.Kind != LauncherSlotKind.App)
+        {
+            ClearFolderHover();
+            return false;
+        }
+
+        if (_folderHoverTargetId != targetId)
+        {
+            ClearFolderHover();
+            _folderHoverTargetId = targetId;
+            _folderHoverStarted = DateTimeOffset.UtcNow;
+            RestoreFolderHoverOrigin();
+        }
+
+        if (_folderPreviewActive) return true;
+        if (DateTimeOffset.UtcNow - _folderHoverStarted < FolderHoverDelay) return !snap;
+
+        _dragEdit.Draft = targetSlot.Kind == LauncherSlotKind.Group
+            ? LauncherLayoutEditor.AddToGroup(_dragOrigin, _dragIconId, targetId, _view.Capacity)
+            : LauncherLayoutEditor.CreateGroup(_dragOrigin, _dragIconId, targetId,
+                Guid.NewGuid().ToString("N"), _view.Capacity);
+        _folderPreviewActive = true;
+        _previewIndex = index;
+        _previewExchange = exchange;
+        RenderIconPreview();
+        return true;
+    }
+
+    private void RestoreFolderHoverOrigin()
+    {
+        if (_dragOrigin is null || _dragEdit is null || _dragIconId is null) return;
+        _dragEdit.Draft = LauncherLayoutRules.DeepClone(_dragOrigin);
+        var slots = _dragOrigin.Pages.SelectMany(page => page.Slots).ToArray();
+        _previewIndex = Array.FindIndex(slots, slot =>
+            slot.Kind == LauncherSlotKind.Group ? slot.Group?.Id == _dragIconId : slot.ItemId == _dragIconId);
+        _previewExchange = false;
+        RenderIconPreview();
+    }
+
+    private void ClearFolderHover()
+    {
+        if (_folderPreviewActive) _previewIndex = -1;
+        _folderHoverTargetId = null;
+        _folderHoverStarted = DateTimeOffset.MinValue;
+        _folderPreviewActive = false;
     }
 
     private void NavigateDragPage(int direction)

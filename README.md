@@ -1,21 +1,33 @@
-# GlassDesk
+# LG Dsk
 
-Windows 11 x64 桌面美化工具：玻璃 Dock、启动台和统一设置中心。
+刘佑林的本地定制版，保留 GlassDesk 原有液态玻璃 Dock、启动台与设置界面，只更换品牌图标并加入应用前台策略和运行应用切换条。
 
-[下载正式版本](https://github.com/everlosttime/glassdesk-updates/releases) · [源码版本](https://github.com/everlosttime/glassdesk-open-source/tags)
+[上游公开源码](https://github.com/everlosttime/glassdesk-open-source) · [上游更新说明](https://github.com/everlosttime/glassdesk-updates)
 
-## 公开版本
+> 版本说明：本仓库以公开的 GlassDesk 1.3.1 源码为基线，并根据公开的 1.4.0 更新说明重建部分行为。上游没有公开 1.4.0 对应源码，因此 LG Dsk 1.4.0 不是上游 1.4.0 源码的逐行合并版本。具体来源与移植边界见 [LG Dsk 1.4.0 移植记录](docs/LG-Dsk-1.4.0.md)。
+
+## LG Dsk 定制
+
+- 原液态玻璃材质、深色外观、布局和现有设置均保留。
+- 将 Z 图标换成浮雕 LG 字标，并加入低饱和陶土橙星芒。星芒是受用户 Claude 桌面风格启发的定制衍生图形，不是 Claude 或 Anthropic 官方标志。
+- 普通应用成为前台时 Dock 收起，鼠标移到底边不会使它弹出；回到桌面后恢复 Dock。
+- `Ctrl+Alt+Space` 显示或隐藏运行应用切换条；全屏应用时不覆盖画面。点选图标会激活应用并收起切换条。
+- 启动台拖动应用到另一应用上停留 500 ms 后创建文件夹；提前松开则按普通排序处理。
+- 不包含自愿赞助入口；本地定制版不连接上游自动更新源。
+- 保持原有 16 ms 动画帧间隔和 100 ms 静止轮询，适配高 DPI 与 4K 桌面而不按 240 Hz 空转轮询。实际联想拯救者 RTX 5090 设备验收尚未进行。
+
+## 上游版本与许可证
 
 - v1.2.2：历史源码快照，包含启动台子图标 DPI 事件引发背景重建的修复。
-- v1.3.1：当前源码快照，包含可独立开关的启动台、此电脑、桌面图标显隐入口、此前的外观与后台资源管理改进，以及 Dock 在窗口最大化/还原后刷新玻璃背景的修复。
+- v1.3.1：本地代码基线，包含可独立开关的启动台、此电脑、桌面图标显隐入口、外观与后台资源管理改进，以及 Dock 在窗口最大化/还原后刷新玻璃背景的修复。
 
 每个标签是对应版本的独立完整源码快照。旧开发历史、本机用户数据、截图、日志和验收记录不包含在这个仓库中。原始版本来源见 SOURCE-PROVENANCE.json。
 
 ## 许可证
 
-GlassDesk 原创代码采用 Apache License 2.0，允许修改、商用及闭源衍生产品，须遵守版权、许可、修改声明等要求。完整条款见 LICENSE；第三方代码与资源保留自身许可，详见 NOTICE 和 docs/third-party。
+上游 GlassDesk 原创代码采用 Apache License 2.0。LG Dsk 保留原版权、许可证和第三方声明，并记录本地修改。完整条款见 LICENSE；第三方代码与资源保留自身许可，详见 NOTICE 和 docs/third-party。
 
-GlassDesk 不打包用户导入应用的图标，项目许可不授予第三方商标权利。
+LG Dsk 不打包用户导入应用的图标，项目许可不授予第三方商标权利，也不代表与 Anthropic/Claude 或其他产品存在官方关联。
 
 ## 环境
 
@@ -59,7 +71,7 @@ artifacts/publish 中的 GlassDesk.exe 可直接运行。不要把自己的 Data
 
 ```powershell
 $env:GLASSDESK_PACKAGE_STAGE = (Resolve-Path artifacts/publish).Path
-ISCC /DAppIdValue=GlassDesk.Independent "/DProductVersion=$version" "/DFileVersion=$version.0" /DWindows11Compatibility=1 "/DPackageBaseName=GlassDesk-$version-win-x64" /Oartifacts packaging/GlassDesk-Capture.iss
+    ISCC /DAppIdValue=GlassDesk.Independent "/DProductVersion=$version" "/DFileVersion=$version.0" /DWindows11Compatibility=1 "/DPackageBaseName=LG-Dsk-$version-win-x64" /Oartifacts packaging/GlassDesk-Capture.iss
 ```
 
 安装包支持选择目录。安装更新保留设置、应用库、布局和图标缓存，卸载也保留 Data。此源码打包流程不要求私有仓库的旧安装载荷。

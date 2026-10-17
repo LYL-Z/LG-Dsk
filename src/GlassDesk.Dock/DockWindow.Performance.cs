@@ -65,6 +65,7 @@ public partial class DockWindow
         GlassSurface.SetPerformanceSleeping(_backgroundCaptureSleeping);
         RebuildAutoHide();
         if (_tilesDirty) { _tilesDirty = false; RefreshTiles(); }
+        else RefreshSwitcherItems();
         RefreshDisplayPlacement();
         if (_showAfterPerformanceSleep && CurrentPrimaryDisplay is not null) Show();
         NotifyPerformanceSurfaceVisibility();

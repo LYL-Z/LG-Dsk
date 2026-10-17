@@ -105,7 +105,7 @@ internal sealed partial class AppHost : IDisposable
 
             MessageBox.Show(
                 StartupIntent.GetLegacyInstanceBlockMessage(legacyStatus),
-                "GlassDesk 启动受阻",
+                "LG Dsk 启动受阻",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
             return StartupOutcome.LegacyInstanceBlocked;
@@ -124,8 +124,8 @@ internal sealed partial class AppHost : IDisposable
         if (!UserDataLease.TryAcquireShared(AppPaths.ForCurrentUser().RootDirectory, out _userDataLease))
         {
             MessageBox.Show(
-                "无法取得 GlassDesk 用户数据的运行租约。数据可能正在维护，或当前文件夹不可访问；为保护数据，本次启动已停止。请稍后重试。",
-                "GlassDesk 数据暂不可用",
+                "无法取得 LG Dsk 用户数据的运行租约。数据可能正在维护，或当前文件夹不可访问；为保护数据，本次启动已停止。请稍后重试。",
+                "LG Dsk 数据暂不可用",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
             return StartupOutcome.UserDataLeaseUnavailable;
@@ -136,8 +136,8 @@ internal sealed partial class AppHost : IDisposable
 
         if (DisplayService.Primary() is not { } startupPrimary)
         {
-            MessageBox.Show("无法读取 Windows 当前主显示器。GlassDesk 未创建任何可见窗口。",
-                "GlassDesk 启动受阻", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show("无法读取 Windows 当前主显示器。LG Dsk 未创建任何可见窗口。",
+                "LG Dsk 启动受阻", MessageBoxButton.OK, MessageBoxImage.Warning);
             return StartupOutcome.PrimaryDisplayUnavailable;
         }
         _primaryDisplaySession = new PrimaryDisplaySession(startupPrimary);
@@ -434,7 +434,7 @@ internal sealed partial class AppHost : IDisposable
         _trayIconHandle = TrayIconArtwork.CreateHandle(32);
 
         _tray = new TrayIcon(_messageWindow.Handle);
-        _tray.Show(_trayIconHandle, "GlassDesk");
+        _tray.Show(_trayIconHandle, "LG Dsk");
     }
 
     private nint OnMessageWindowProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
@@ -597,7 +597,7 @@ internal sealed partial class AppHost : IDisposable
             return;
         }
 
-        _tray.Update(TrayIconArtwork.CreateHandle(32), "GlassDesk");
+        _tray.Update(TrayIconArtwork.CreateHandle(32), "LG Dsk");
 
         var icon = CreateWindowIcon();
         foreach (Window window in new Window[] { _dock!, _launcher!, _settings! })

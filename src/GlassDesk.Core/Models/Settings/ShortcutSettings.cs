@@ -71,8 +71,17 @@ public sealed class ShortcutSettings
 
     public HotkeyDefinition ToggleDesktopIcons { get; set; } = new();
 
-    /// <summary>切换 Dock 被遮挡时的鼠标唤出锁；开启后禁止唤出，关闭后允许鼠标移到 Dock 原位置唤出。</summary>
+    /// <summary>兼容旧配置文件中的边缘唤出锁热键；当前版本不再注册此操作。</summary>
     public HotkeyDefinition ToggleDockRevealLock { get; set; } = new();
+
+    /// <summary>在应用前台显式显示或隐藏运行应用切换条。</summary>
+    public HotkeyDefinition ToggleRunningAppSwitcher { get; set; } = new()
+    {
+        Enabled = true,
+        Control = true,
+        Alt = true,
+        Key = "Space",
+    };
 
     /// <summary>
     /// 热区默认关闭。它很容易被误触发，因此需要用户显式
@@ -103,6 +112,7 @@ public sealed class ShortcutSettings
         PreviousPage ??= new HotkeyDefinition();
         ToggleDesktopIcons ??= new HotkeyDefinition();
         ToggleDockRevealLock ??= new HotkeyDefinition();
+        ToggleRunningAppSwitcher ??= new HotkeyDefinition { Enabled = true, Control = true, Alt = true, Key = "Space" };
         MouseBackButton ??= new HotkeyDefinition();
         MouseForwardButton ??= new HotkeyDefinition();
     }

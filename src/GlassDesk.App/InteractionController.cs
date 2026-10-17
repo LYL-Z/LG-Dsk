@@ -82,7 +82,7 @@ internal sealed class InteractionController : IDisposable
         InputAction.HideLauncher => _launcherVisible,
         InputAction.NextPage or InputAction.PreviousPage => _canNavigatePages,
         InputAction.ToggleDesktopIcons => _desktopAvailable,
-        InputAction.ToggleDockRevealLock => true,
+        InputAction.ToggleRunningAppSwitcher => true,
         _ => false,
     };
 

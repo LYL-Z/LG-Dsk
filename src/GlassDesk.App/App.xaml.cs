@@ -187,7 +187,7 @@ public partial class App : Application, IDisposable
             case StartupOutcome.NothingToDo:
                 // 本次启动只要求「退出」，而当时没有实例在运行。
                 // 没有别的实例可通知，更不该因此把界面拉起来。
-                ReportWriter.Write("没有正在运行的 GlassDesk 实例，无需退出。", null);
+                ReportWriter.Write("没有正在运行的 LG Dsk 实例，无需退出。", null);
                 Shutdown(0);
                 break;
 

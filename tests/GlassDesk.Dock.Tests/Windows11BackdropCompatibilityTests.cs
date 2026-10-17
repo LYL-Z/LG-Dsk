@@ -366,7 +366,7 @@ public sealed class Windows11BackdropCompatibilityTests(ITestOutputHelper output
         {
             Directory.CreateDirectory(_root);
             var probe = CompatibilityProbePath.File("GlassCaptureProbe.dll");
-            var start = new ProcessStartInfo("D:\\dotnet10\\dotnet.exe") { UseShellExecute = false, CreateNoWindow = true };
+            var start = new ProcessStartInfo(ResolveDotNetHost()) { UseShellExecute = false, CreateNoWindow = true };
             start.ArgumentList.Add(probe); start.ArgumentList.Add("fixture"); start.ArgumentList.Add(_root);
             _process = Process.Start(start)!;
             Wait(() => File.Exists(Path.Combine(_root, "ready.json")));
@@ -404,6 +404,16 @@ public sealed class Windows11BackdropCompatibilityTests(ITestOutputHelper output
                 if (!_process.WaitForExit(3000)) _process.Kill();
             }
             _process.Dispose();
+        }
+
+        private static string ResolveDotNetHost()
+        {
+            var configured = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH");
+            if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured)) return configured;
+
+            var fromRuntime = Path.GetFullPath(Path.Combine(
+                RuntimeEnvironment.GetRuntimeDirectory(), "..", "..", "..", "dotnet.exe"));
+            return File.Exists(fromRuntime) ? fromRuntime : "dotnet";
         }
     }
 

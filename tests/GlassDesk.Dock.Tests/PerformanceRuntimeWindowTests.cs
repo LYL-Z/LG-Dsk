@@ -69,7 +69,7 @@ public sealed class PerformanceRuntimeWindowTests
             Assert.NotNull(sleep);
             sleep.Invoke(window, [true]);
             window.SetLauncherContainerState(true);
-            window.ToggleRevealLock();
+            window.ToggleRunningAppSwitcher();
             var timer = typeof(DockWindow).GetField("_frameTimer", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window) as DispatcherTimer;
             Assert.False(timer?.IsEnabled == true);
             Assert.True((bool)typeof(DockWindow).GetProperty("IsPerformanceSleeping")!.GetValue(window)!);

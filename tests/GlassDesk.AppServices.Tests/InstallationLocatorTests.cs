@@ -5,7 +5,7 @@ namespace GlassDesk.AppServices.Tests;
 
 public sealed class InstallationLocatorTests : IDisposable
 {
-    private const string DisplayName = "GlassDesk";
+    private const string DisplayName = "LG Dsk";
     private readonly string _registrySubkey = $"Software\\GlassDesk.Tests\\{Guid.NewGuid():N}";
     private readonly string _tempRoot = Path.Combine(Path.GetTempPath(), "GlassDesk-install-locator-" + Guid.NewGuid().ToString("N"));
     private readonly string _installDirectory;
@@ -44,6 +44,16 @@ public sealed class InstallationLocatorTests : IDisposable
         var result = Locator().Inspect(_installedExe);
 
         Assert.Equal(InstallationState.Portable, result.State);
+    }
+
+    [Fact]
+    public void Legacy_GlassDesk_registration_remains_compatible()
+    {
+        WriteRegistration(_installDirectory, $"\"{_uninstaller}\"", "GlassDesk");
+
+        var result = Locator().Inspect(_installedExe);
+
+        Assert.Equal(InstallationState.VerifiedInstalled, result.State);
     }
 
     [Fact]
@@ -88,11 +98,11 @@ public sealed class InstallationLocatorTests : IDisposable
 
     private InstallationLocator Locator() => new(_registrySubkey);
 
-    private void WriteRegistration(string installLocation, string uninstallString)
+    private void WriteRegistration(string installLocation, string uninstallString, string displayName = DisplayName)
     {
         using var key = Registry.CurrentUser.CreateSubKey(_registrySubkey, writable: true)
             ?? throw new InvalidOperationException("Could not create isolated test registration key.");
-        key.SetValue("DisplayName", DisplayName, RegistryValueKind.String);
+        key.SetValue("DisplayName", displayName, RegistryValueKind.String);
         key.SetValue("InstallLocation", installLocation, RegistryValueKind.String);
         key.SetValue("UninstallString", uninstallString, RegistryValueKind.String);
     }

@@ -1,4 +1,6 @@
 using System.IO;
+using System.Diagnostics;
+using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -47,6 +49,9 @@ public partial class DockWindow : GlassWindow
     private readonly DockTileStrip _tileStrip;
 
     private readonly List<DockTileModel> _models = [];
+    private readonly ObservableCollection<RunningAppTile> _switcherItems = [];
+    private readonly Dictionary<string, BitmapSource?> _switcherIconCache = new(StringComparer.OrdinalIgnoreCase);
+    private DockPresentationMode _presentationMode = DockPresentationMode.DesktopDock;
 
     // ---- 自动隐藏（D-19） ----
 
@@ -54,8 +59,7 @@ public partial class DockWindow : GlassWindow
     private System.Windows.Threading.DispatcherTimer? _frameTimer;
     private PixelRect _restingRect;
     private int _fullyHiddenOffsetPixels;
-    private bool _revealLocked;
-    private bool _edgeRevealedDuringSuppression;
+    private bool _switcherRequested;
     private bool _launcherContainerActive;
     private Rect? _slidePanelBoundsDip;
     private bool _backdropWasActive;
@@ -101,6 +105,7 @@ public partial class DockWindow : GlassWindow
     {
         InitializeComponent();
         InitializeEntryHover();
+        RunningAppsItems.ItemsSource = _switcherItems;
         PanelCornerRadius = new CornerRadius(40);
         GlassSurface.IsBackdropActive = () => IsOpticalSurfaceVisible;
 
@@ -467,6 +472,7 @@ public partial class DockWindow : GlassWindow
 
         _tileStrip.SetTiles(_models);
         ApplyStripMetrics();
+        RefreshSwitcherItems();
     }
 
     private DockTileModel CreateTile(AppEntry entry, DockSettings settings, RunningAppTracker tracker, Brush? dotBrush)
@@ -1126,6 +1132,8 @@ public partial class DockWindow : GlassWindow
                     ? Visibility.Visible
                     : Visibility.Collapsed;
             }
+
+            RefreshSwitcherItems();
         });
     }
 
@@ -1390,16 +1398,19 @@ public partial class DockWindow : GlassWindow
         }
 
         var now = DateTime.UtcNow;
-        var cursor = DisplayService.GetCursorPixelPoint();
         var fullscreen = FullscreenDetector.IsFullscreenActive();
-        var covered = ForegroundCoverage.IsCovered(_restingRect);
-        var suppressed = fullscreen || covered;
-        var pointerOverDock = cursor is { } currentPoint
-            && Inflate(GetVisibleDockRect(), 2).Contains(currentPoint.X, currentPoint.Y);
-
-        var pointerOverDockPosition = cursor is { } position
-            && Inflate(_restingRect, 2).Contains(position.X, position.Y);
-        UpdateAutoHideState(now, fullscreen, covered, pointerOverDockPosition, pointerOverDock);
+        var externalForeground = ForegroundCoverage.IsExternalApplicationForeground();
+        var hasSwitchableApplications = _switcherItems.Count > 0;
+        if (!externalForeground || fullscreen || !hasSwitchableApplications)
+            _switcherRequested = false;
+        var mode = DockPresentationPolicy.Resolve(
+            _launcherContainerActive,
+            externalForeground,
+            fullscreen,
+            hasSwitchableApplications,
+            _switcherRequested);
+        ApplyPresentationMode(mode);
+        UpdateAutoHideState(now, fullscreen, externalForeground, mode);
 
         // 滑动插值：向目标滑出量靠近。
         var target = _autoHide.State == AutoHideState.Hidden
@@ -1440,73 +1451,133 @@ public partial class DockWindow : GlassWindow
         }
 
         if (_frameTimer is not null)
-            _frameTimer.Interval = !_backgroundCaptureSleeping && (suppressed || _autoHide.Suppressed)
+            _frameTimer.Interval = !_backgroundCaptureSleeping && _autoHide.Suppressed
                 || Math.Abs(_slideOffsetPixels - target) > 0.5
                 ? FrameInterval
                 : TimeSpan.FromMilliseconds(100);
         NotifyPerformanceSurfaceVisibility();
     }
 
-    private void UpdateAutoHideState(DateTime now, bool fullscreen, bool covered,
-        bool pointerOverDockPosition, bool pointerOverVisibleDock)
+    private void UpdateAutoHideState(DateTime now, bool fullscreen, bool externalForeground, DockPresentationMode mode)
     {
         if (_autoHide is null) return;
-        if (_launcherContainerActive)
+        if (_launcherContainerActive || !externalForeground
+            || (!fullscreen && mode == DockPresentationMode.RunningAppSwitcher))
         {
-            _edgeRevealedDuringSuppression = false;
             _autoHide.ForceShown(now);
         }
-        else if (fullscreen || covered)
+        else if (fullscreen || externalForeground)
         {
-            if (_revealLocked)
-            {
-                _edgeRevealedDuringSuppression = false;
-                _autoHide.ForceHide(now);
-            }
-            else if (_autoHide.State == AutoHideState.Hidden)
-            {
-                if (PassiveRevealPolicy.CanRevealDuringSuppression(pointerOverDockPosition, _revealLocked)
-                    && _autoHide.TryReveal(false, now))
-                    _edgeRevealedDuringSuppression = true;
-            }
-            else if (_edgeRevealedDuringSuppression)
-            {
-                if (pointerOverVisibleDock) _autoHide.PointerEnter(now);
-                else _autoHide.PointerLeave(now);
-                _autoHide.Poll(now);
-            }
-            else
-                _autoHide.ForceHide(now);
+            _autoHide.ForceHide(now);
         }
         else
         {
-            _edgeRevealedDuringSuppression = false;
             _autoHide.ForceShown(now);
         }
-
-        if (_autoHide.State == AutoHideState.Hidden)
-            _edgeRevealedDuringSuppression = false;
     }
 
-    private PixelRect GetVisibleDockRect()
+    private void ApplyPresentationMode(DockPresentationMode mode)
     {
-        var slidePixels = (int)Math.Round(_slideOffsetPixels * SlideOutDirection(), MidpointRounding.AwayFromZero);
-        var translated = _restingRect with { Y = _restingRect.Y + slidePixels };
-        if (PrimaryDisplaySession is null) return translated;
-        var left = Math.Max(_restingRect.X, translated.X);
-        var top = Math.Max(_restingRect.Y, translated.Y);
-        var right = Math.Min(_restingRect.Right, translated.Right);
-        var bottom = Math.Min(_restingRect.Bottom, translated.Bottom);
-        return right <= left || bottom <= top
-            ? new PixelRect(_restingRect.X, _restingRect.Y, 0, 0)
-            : new PixelRect(left, top, right - left, bottom - top);
+        if (_presentationMode == mode) return;
+        _presentationMode = mode;
+
+        var showSwitcher = mode == DockPresentationMode.RunningAppSwitcher;
+        SwitcherContentLayer.Visibility = showSwitcher ? Visibility.Visible : Visibility.Collapsed;
+        DockContentLayer.Opacity = showSwitcher ? 0 : 1;
+        DockContentLayer.IsHitTestVisible = !showSwitcher;
     }
 
-    /// <summary>切换本次运行期间的遮挡唤出锁；不影响未被覆盖的 Dock。</summary>
-    public void ToggleRevealLock()
+    private void RefreshSwitcherItems()
     {
-        _revealLocked = !_revealLocked;
+        if (_services is null) return;
+        var items = RunningWindowSwitcherItems.Create(_services.Running.LastWindows, (uint)Environment.ProcessId);
+        _switcherItems.Clear();
+        foreach (var item in items)
+        {
+            var displayName = GetSwitcherDisplayName(item);
+            var glyph = displayName.Length == 0 ? "·" : displayName[..1].ToUpperInvariant();
+            _switcherItems.Add(new RunningAppTile(
+                item.Handle,
+                item.ProcessId,
+                displayName,
+                item.ToolTipText,
+                glyph,
+                LoadSwitcherIcon(item.IconSource),
+                item.IsMinimized));
+        }
+    }
+
+    private static string GetSwitcherDisplayName(RunningWindowSwitcherItem item)
+    {
+        if (!string.IsNullOrWhiteSpace(item.IconSource))
+        {
+            try
+            {
+                var description = FileVersionInfo.GetVersionInfo(item.IconSource).FileDescription;
+                if (!string.IsNullOrWhiteSpace(description)) return description.Trim();
+                var fileName = Path.GetFileNameWithoutExtension(item.IconSource);
+                if (!string.IsNullOrWhiteSpace(fileName)) return fileName;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                // Use the window title if the process image has no readable version resource.
+            }
+        }
+
+        return item.DisplayName;
+    }
+
+    private BitmapSource? LoadSwitcherIcon(string? iconSource)
+    {
+        if (string.IsNullOrWhiteSpace(iconSource)) return null;
+        string key;
+        try { key = Path.GetFullPath(iconSource); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return null; }
+
+        if (_switcherIconCache.TryGetValue(key, out var cached)) return cached;
+        ExtractedIcon? extracted;
+        try { extracted = IconExtractor.Extract(key); }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { extracted = null; }
+        if (extracted is null || extracted.VisiblePixelCount == 0)
+        {
+            _switcherIconCache[key] = null;
+            return null;
+        }
+
+        var bitmap = BitmapSource.Create(extracted.Width, extracted.Height, 96, 96,
+            System.Windows.Media.PixelFormats.Bgra32, null, extracted.Bgra, extracted.Width * 4);
+        bitmap.Freeze();
+        _switcherIconCache[key] = bitmap;
+        return bitmap;
+    }
+
+    private void OnSwitcherItemClick(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not RunningAppTile item) return;
+        _switcherRequested = false;
+        OnAutoHideFrame();
+        var outcome = LaunchService.ActivateWindow(item.Handle);
+        if (outcome.Outcome != ActivationOutcome.Activated)
+            ShowFailureNotice(outcome.Message ?? "没能切换到该应用窗口。");
+    }
+
+    private void OnSwitcherMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+    {
+        RunningAppsScrollViewer.ScrollToHorizontalOffset(
+            Math.Max(0, RunningAppsScrollViewer.HorizontalOffset - e.Delta));
+        e.Handled = true;
+    }
+
+    /// <summary>显式切换前台应用上的运行应用条；鼠标边缘移动不会触发。</summary>
+    public void ToggleRunningAppSwitcher()
+    {
         if (_performanceSleepRequested) return;
+        if (ForegroundCoverage.IsExternalApplicationForeground()
+            && !FullscreenDetector.IsFullscreenActive()
+            && _switcherItems.Count > 0)
+            _switcherRequested = !_switcherRequested;
+        else
+            _switcherRequested = false;
         if (_frameTimer is not null)
         {
             _frameTimer.Interval = FrameInterval;
@@ -1514,9 +1585,6 @@ public partial class DockWindow : GlassWindow
         }
         OnAutoHideFrame();
     }
-
-    private static PixelRect Inflate(PixelRect rect, int by)
-        => new(rect.X - by, rect.Y - by, rect.Width + by * 2, rect.Height + by * 2);
 
     protected override void OnSourceInitialized(EventArgs e)
     {

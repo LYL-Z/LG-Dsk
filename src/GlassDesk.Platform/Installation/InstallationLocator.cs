@@ -18,7 +18,7 @@ public sealed record InstallationInfo(
     string? UninstallerPath = null,
     string? Error = null);
 
-/// <summary>只读核验当前程序是否与固定的 GlassDesk Inno Setup 安装登记相符。</summary>
+/// <summary>只读核验当前程序是否与 LG Dsk 或旧版 GlassDesk 的 Inno Setup 安装登记相符。</summary>
 /// <remarks>读取 UninstallString 仅用于提取候选路径；本类从不执行登记字符串或其参数。</remarks>
 public sealed class InstallationLocator
 {
@@ -67,9 +67,9 @@ public sealed class InstallationLocator
                 var displayName = ReadString(key, "DisplayName");
                 var installValue = ReadString(key, "InstallLocation");
                 var uninstallValue = ReadString(key, "UninstallString");
-                if (!string.Equals(displayName, "GlassDesk", StringComparison.Ordinal))
+                if (displayName is not ("LG Dsk" or "GlassDesk"))
                 {
-                    return Mismatch("固定产品登记的显示名称与 GlassDesk 不一致。");
+                    return Mismatch("固定产品登记的显示名称与 LG Dsk 不一致。");
                 }
 
                 if (string.IsNullOrWhiteSpace(installValue) || string.IsNullOrWhiteSpace(uninstallValue))

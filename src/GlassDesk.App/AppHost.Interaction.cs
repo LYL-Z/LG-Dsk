@@ -109,8 +109,8 @@ internal sealed partial class AppHost
             case InputAction.ToggleDesktopIcons:
                 _interaction?.ToggleDesktopIcons();
                 break;
-            case InputAction.ToggleDockRevealLock:
-                _dock?.ToggleRevealLock();
+            case InputAction.ToggleRunningAppSwitcher:
+                _dock?.ToggleRunningAppSwitcher();
                 break;
         }
     }

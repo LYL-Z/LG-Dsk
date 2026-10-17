@@ -23,25 +23,21 @@ internal sealed partial class AppHost
 
     private void InitializeUpdates()
     {
-        _settings!.CheckForUpdatesRequested += async (_, _) => await CheckUpdatesAsync(manual: true);
-        _settings.ShowUpdateStatus(ProductVersion.ToString(), "启动时会自动检查新版本，也可以手动检查。");
-        // Only the installed normal application contacts the service automatically; build/acceptance copies do not.
-        if (_options.Sample == Startup.AppearanceSample.None && new InstallationLocator().Inspect(Environment.ProcessPath ?? string.Empty).State == InstallationState.VerifiedInstalled)
-            _application.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(async () => await CheckUpdatesAsync(manual: false)));
+        _settings!.ShowUpdateStatus(ProductVersion.ToString(), "LG Dsk 本地定制版未配置在线更新源，请从本地仓库构建更新。");
     }
 
     private UpdateClient CreateUpdateClient()
     {
-        const string defaultSource = "https://api.github.com/repos/everlosttime/glassdesk-updates/releases/latest";
         var file = Path.Combine(AppContext.BaseDirectory, "update-source.json");
-        var source = defaultSource;
-        if (File.Exists(file))
-        {
-            if (new FileInfo(file).Length > 8192) throw new InvalidDataException("更新源配置过大。");
-            using var document = JsonDocument.Parse(File.ReadAllText(file));
-            source = document.RootElement.GetProperty("releasesApi").GetString() ?? throw new InvalidDataException("更新源未配置。");
-        }
-        return new UpdateClient(_updateHttp, new Uri(source));
+        if (!File.Exists(file)) throw new InvalidDataException("LG Dsk 本地定制版未配置在线更新源。");
+        if (new FileInfo(file).Length > 8192) throw new InvalidDataException("更新源配置过大。");
+        using var document = JsonDocument.Parse(File.ReadAllText(file));
+        var source = document.RootElement.GetProperty("releasesApi").GetString();
+        if (string.IsNullOrWhiteSpace(source)
+            || !Uri.TryCreate(source, UriKind.Absolute, out var uri)
+            || uri.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidDataException("LG Dsk 本地定制版未配置有效的 HTTPS 更新源。");
+        return new UpdateClient(_updateHttp, uri);
     }
 
     private async Task CheckUpdatesAsync(bool manual)

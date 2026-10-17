@@ -13,7 +13,7 @@ public sealed class InteractionSettingsTests
     public void MouseChordUsesExistingSaveConflictAndRollbackFlow(string key)
     {
         using var fixture = new Fixture();
-        var binding = new ShortcutSettings { ToggleLauncher = new() { Enabled = true, Key = key } };
+        var binding = new ShortcutSettings { ToggleLauncher = new() { Enabled = true, Key = key }, ToggleRunningAppSwitcher = new() };
         Assert.Null(fixture.Service.Apply(binding, new()));
         var before = File.ReadAllBytes(fixture.Data.Settings.FilePath);
         using (File.Open(fixture.Data.Settings.FilePath, FileMode.Open, FileAccess.Read, FileShare.None))
@@ -33,6 +33,16 @@ public sealed class InteractionSettingsTests
         Assert.Equal("Q", fixture.Data.Settings.Current.Shortcuts.ToggleLauncher.Key);
         Assert.Equal(before, File.ReadAllBytes(fixture.Data.Settings.FilePath));
         Assert.Equal(InputAction.ToggleLauncher, fixture.Service.ResolveAction(fixture.Registry.Items.Single().Key));
+    }
+
+    [Fact]
+    public void DefaultSettingsRegisterRunningAppSwitcherOnCtrlAltSpace()
+    {
+        using var fixture = new Fixture();
+        Assert.Null(fixture.Service.Apply(new ShortcutSettings { ToggleLauncher = new() }, new()));
+        var registration = Assert.Single(fixture.Registry.Items);
+        Assert.Equal(new HotkeyChord(3, 32), registration.Value);
+        Assert.Equal(InputAction.ToggleRunningAppSwitcher, fixture.Service.ResolveAction(registration.Key));
     }
 
     [Fact]
@@ -68,14 +78,18 @@ public sealed class InteractionSettingsTests
         using var fixture = new Fixture();
         Assert.Null(fixture.Service.Apply(Bound("Q"), new()));
         var id = fixture.Registry.Items.Single().Key;
-        var next = new ShortcutSettings { HideLauncher = Bound("Q").ToggleLauncher };
+        var next = new ShortcutSettings { HideLauncher = Bound("Q").ToggleLauncher, ToggleRunningAppSwitcher = new() };
         Assert.Null(fixture.Service.Apply(next, new()));
         Assert.Equal(InputAction.HideLauncher, fixture.Service.ResolveAction(id));
         fixture.Service.Dispose();
         Assert.Empty(fixture.Registry.Items);
     }
 
-    private static ShortcutSettings Bound(string key) => new() { ToggleLauncher = new() { Enabled = true, Control = true, Alt = true, Key = key } };
+    private static ShortcutSettings Bound(string key) => new()
+    {
+        ToggleLauncher = new() { Enabled = true, Control = true, Alt = true, Key = key },
+        ToggleRunningAppSwitcher = new(),
+    };
     private sealed class Registry : IHotkeyRegistry
     {
         public readonly Dictionary<int, HotkeyChord> Items = [];
