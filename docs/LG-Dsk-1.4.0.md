@@ -39,6 +39,15 @@
 ## 本地数据和构建
 
 - 应用数据仍由现有 `AppPaths.ForCurrentUser()` 决定。源码运行时使用 `AppContext.BaseDirectory\Data`；不会自动导入另一安装目录的数据。
-- 当前变更没有安装到 Windows，也没有创建发布安装包或推送 GitHub。
+- 已生成自包含 x64 便携目录与 ZIP：`artifacts/LG-Dsk-1.4.0-win-x64/`、`artifacts/LG-Dsk-1.4.0-win-x64.zip`；已使用 Inno Setup 7.1.0 编译用户级安装包 `artifacts/LG-Dsk-1.4.0-win-x64-Setup.exe`。发布包不带用户 `Data` 目录。
+- 安装脚本编译成功，Setup 文件属性的产品名称为 LG Dsk、版本为 1.4.0。安装包没有 Authenticode 签名；尚未实际执行安装器，也未在目标 Legion 笔记本上启动程序。
 - `GlassDesk.exe` 程序集文件名保留，以减少对现有资源 URI、安装身份和内部引用的改动；Windows 文件属性与应用界面显示 LG Dsk。
-- 公开源码仓库缺少 `build/package.ps1` 与 `build/verify-package.ps1`。当前验证以应用编译和可运行测试项目为准，不声称安装包构建通过。
+- 公开源码仓库缺少 `build/package.ps1` 与 `build/verify-package.ps1`。本地安装包通过 Inno Setup 脚本直接编译；缺少的是上游旧打包脚本和其对应验证流程，不应把它们描述为已运行。
+
+## 验证记录
+
+- Release 构建成功：0 个警告、0 个错误。
+- Core：161/161 通过；Dock 前台/切换策略：11/11 通过；AppServices 的安装路径与交互设置聚焦测试：15/15 通过。
+- Dock 完整测试：484/485 通过。唯一失败是 `RevealSleepRegressionTests.DeepSleepingLauncherRetiresItsLargeLayeredWindowAndRestoresItsPlacementOnWake` 的窗口计数断言；在干净的 v1.3.1 基线临时工作树中复现相同失败，因此它不是本次改动引入的回归。
+- AppServices 完整测试：327/373 通过，46 项失败集中在公开源码快照未提供的 `build/package.ps1`、`build/verify-package.ps1` 及其依赖的打包路径检查。不能据此声称 AppServices 全套通过。
+- 已核对安装包的产品元数据、便携包文件完整性校验值与发布目录不含 `Data`；没有做真实安装、应用窗口切换、全屏、HDR、多显示器或长时间运行验收。
