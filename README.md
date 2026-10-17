@@ -4,17 +4,17 @@
 
 ![LG Dsk 图标预览](docs/assets/lg-dsk-icon-preview.png)
 
-![版本](https://img.shields.io/badge/version-1.4.0--custom-blue) ![平台](https://img.shields.io/badge/platform-Windows%2011%20x64-0078D4) ![运行时](https://img.shields.io/badge/runtime-.NET%2010-512BD4) ![许可证](https://img.shields.io/badge/license-Apache--2.0-green) ![CI](https://img.shields.io/badge/CI-not%20configured-lightgrey) ![覆盖率](https://img.shields.io/badge/coverage-not%20measured-lightgrey) ![安全扫描](https://img.shields.io/badge/security%20scan-not%20run-lightgrey)
+![版本](https://img.shields.io/github/v/release/LYL-Z/LG-Dsk?sort=semver) ![平台](https://img.shields.io/badge/platform-Windows%2011%20x64-0078D4) ![运行时](https://img.shields.io/badge/runtime-.NET%2010-512BD4) ![许可证](https://img.shields.io/github/license/LYL-Z/LG-Dsk) ![Stars](https://img.shields.io/github/stars/LYL-Z/LG-Dsk) ![下载量](https://img.shields.io/github/downloads/LYL-Z/LG-Dsk/total) ![贡献者](https://img.shields.io/github/contributors/LYL-Z/LG-Dsk) ![CI](https://img.shields.io/badge/CI-not%20configured-lightgrey) ![覆盖率](https://img.shields.io/badge/coverage-not%20measured-lightgrey) ![安全扫描](https://img.shields.io/badge/security%20scan-not%20run-lightgrey)
 
 > **玻璃留下，干扰退后，切换随手。**
 
-LG Dsk 是单用户 Windows 桌面程序，不是系统任务栏替代品、Web 服务或企业桌面管理平台。仓库目前为私有仓库；Stars、下载量、社区响应时间等公开徽章不适用，也没有足够数据可供报告。
+LG Dsk 是公开维护的单用户 Windows 桌面程序，不是系统任务栏替代品、Web 服务或企业桌面管理平台。Stars、下载量与贡献者数量由徽章实时读取；项目不承诺 Issue 响应 SLA。Docker 拉取量、覆盖率和 CI 状态没有对应的项目数据，不使用虚构数值。
 
 ## 一、项目头部 Header
 
 | 指标 | 当前状态 |
 | --- | --- |
-| 发布版本 | LG Dsk 1.4.0（个人定制版） |
+| 发布版本 | LG Dsk 1.4.1（安装目录迁移修正版；基于 1.4.0 定制版） |
 | 目标平台 | Windows 11 x64，Build 22000 及以上 |
 | 主要技术 | C#、WPF、.NET 10、Windows API |
 | 许可证 | Apache License 2.0；第三方资源遵循各自许可 |
@@ -22,7 +22,8 @@ LG Dsk 是单用户 Windows 桌面程序，不是系统任务栏替代品、Web 
 | 测试覆盖率 | 未测量；不发布覆盖率徽章或百分比 |
 | 安全扫描 | 未运行独立依赖漏洞或静态安全扫描 |
 | Docker / Kubernetes | 不适用于本地 Windows 桌面程序 |
-| Stars、下载量、Issue 响应 SLA | 私有仓库/无长期社区数据，不报告 |
+| Stars、下载量、贡献者 | 由 GitHub 徽章动态读取；随仓库活动变化 |
+| Issue 响应 SLA | 未承诺；由单人维护者按能力处理 |
 
 ## 二、项目概览 Overview
 
@@ -50,7 +51,7 @@ LG Dsk 属于**单机桌面效率工具**，由 Dock、启动台、设置窗口�
 | 提供显式应用切换入口 | 默认 `Ctrl+Alt+Space` | 设置默认值与快捷键测试 |
 | 保留原启动台建组交互 | 约 500 ms 悬停 | 启动台实现与已有行为说明 |
 | 避免高刷新率空转轮询 | 活跃动画 16 ms；静止轮询 100 ms | 源码调度值；不是 GPU/CPU 基准结果 |
-| 交付自包含安装包 | 60,441,361 字节 Setup；83,174,661 字节 ZIP | 编译产物与 SHA-256 清单 |
+| 交付自包含安装包 | 以 [最新 Release](https://github.com/LYL-Z/LG-Dsk/releases/latest) 与 SHA-256 清单为准 | 上传资产大小与校验和可在 Release 核验 |
 
 上表中的调度间隔、文件大小和测试计数是可测事实，不代表对照版本的性能提升。当前没有实测启动延迟、CPU、GPU、显存或功耗数据。
 
@@ -91,7 +92,7 @@ flowchart LR
 4. **全屏让位：**全屏时不叠加切换条，减少对游戏和视频画面的遮挡。
 5. **可测试的决策：**窗口策略与纯状态决策拆分，核心分支可由单元测试验证。
 6. **本地数据边界：**应用库、布局、设置和图标数据保留在程序自己的 `Data` 目录；发布包不包含个人数据。
-7. **兼容优先：**保留 `GlassDesk.exe`、旧安装身份和默认程序路径，降低覆盖升级的迁移风险。
+7. **兼容优先：**保留 `GlassDesk.exe` 与旧安装身份；默认目录更名为 LG Dsk，并在升级时校验迁移用户数据与自启动路径。
 8. **证据驱动：**未公开的上游实现、未测量的性能收益和未经真机验证的兼容范围都明确标注。
 
 ### 技术选型与取舍
@@ -291,7 +292,9 @@ var mode = DockPresentationPolicy.Resolve(
 | 前台/切换策略测试 | 11/11 通过 | 本地自动化结果 |
 | AppServices 聚焦测试 | 15/15 通过 | 本地自动化结果 |
 | Dock 全量测试 | 484/485 通过 | 1 项窗口计数断言在 v1.3.1 基线也复现 |
-| AppServices 全量测试 | 327/373 通过 | 46 项与缺少旧打包脚本相关；详见[验证记录](docs/LG-Dsk-1.4.0.md#验证记录) |
+| AppServices 全量测试 | 327/373 通过 | 46 项与缺少旧打包脚本相关；详见[1.4.0 验证记录](docs/LG-Dsk-1.4.0.md#验证记录) |
+
+上述测试计数来自 1.4.0 源码验证。1.4.1 只调整安装位置迁移和发布元数据；该修正版的安装脚本已编译，完整交互安装尚未在目标设备上实测。
 
 ### 横向/纵向对比
 
@@ -311,11 +314,12 @@ dotnet test tests/GlassDesk.Dock.Tests/GlassDesk.Dock.Tests.csproj -c Release
 
 ### 环境与最短流程
 
-1. 从[最新 Release](https://github.com/LYL-Z/LG-Dsk/releases/latest)下载 `LG-Dsk-1.4.0-win-x64-Setup.exe`。
-2. 先从托盘退出仍在运行的 GlassDesk，再启动安装程序。
-3. 选择安装目录；如需桌面快捷方式，勾选安装选项。
-4. 启动后回到桌面查看 Dock；打开普通应用后 Dock 应收起。
-5. 按 `Ctrl+Alt+Space` 呼出运行应用条，点选一个程序，再验证全屏时不会显示切换条。
+1. 从[最新 Release](https://github.com/LYL-Z/LG-Dsk/releases/latest)下载 Windows x64 安装包。
+2. 先从托盘完全退出仍在运行的 GlassDesk，再启动安装程序。
+3. 新装默认位置为 `%LOCALAPPDATA%\Programs\LG Dsk`；从旧版升级时，安装器会校验并迁移旧 `Data`，再移除旧安装。若无法安全校验或目标目录已有用户数据，安装会停止而不会覆盖。
+4. 如需桌面快捷方式，勾选安装选项。
+5. 启动后回到桌面查看 Dock；打开普通应用后 Dock 应收起。
+6. 按 `Ctrl+Alt+Space` 呼出运行应用条，点选一个程序，再验证全屏时不会显示切换条。
 
 便携版用户可下载 ZIP、解压并运行 `GlassDesk.exe`。首次运行会在程序旁生成独立的 `Data` 目录。
 
@@ -342,7 +346,7 @@ dotnet run --project src/GlassDesk.App/GlassDesk.App.csproj -c Release
 | Windows 包管理器 | 未提供 | 没有 Winget/Chocolatey/Scoop 清单 |
 | Docker / Kubernetes / Helm | 不适用 | WPF 交互桌面程序需要用户会话和 Windows Shell |
 
-安装目录默认是 `%LOCALAPPDATA%\Programs\GlassDesk`。为降低升级风险，安装身份、默认目录及 EXE 文件名仍保留 GlassDesk；显示名称和品牌为 LG Dsk。安装器排除 `Data`，正常原位升级不会把包内模板覆盖到用户数据；卸载保留非空数据目录。用户实际安装前仍应备份重要设置。
+安装目录默认是 `%LOCALAPPDATA%\Programs\LG Dsk`。安装身份和 `GlassDesk.exe` 文件名为兼容升级而保留；新安装路径使用 LG Dsk 品牌。检测到旧版 GlassDesk 安装时，安装器校验注册路径与卸载程序，逐文件复制并校验 `Data`，仅迁移指向旧产品路径的自启动项，然后卸载旧程序。若校验失败、迁移目录含重解析点、目标已有数据或旧程序仍在运行，安装会停止。卸载阶段若中断，迁移暂存数据会保留；若旧卸载状态无法确认，后续安装会停止并要求人工检查，不会删除暂存副本。迁移脚本不主动删除旧目录的 `Data` 副本；旧卸载器若保留非空目录，可在确认新版本数据正常后手动清理。重要设置仍建议预先备份。
 
 ### 配置与数据
 
@@ -380,7 +384,7 @@ JSON 结构属于应用内部持久化格式，不承诺是稳定的外部 API�
 
 ## 十三、项目治理与社区 Community & Governance
 
-仓库目前由个人维护且为私有仓库。尚无正式的 `CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、Issue 模板、维护者委员会、社区会议、支持 SLA 或贡献者晋升机制。后续若转为公开项目，应先补充协作流程、行为准则、版本政策和安全披露流程。
+仓库已公开，由个人维护。贡献流程、行为准则、安全披露与 Issue 模板见 [`CONTRIBUTING.md`](CONTRIBUTING.md)、[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)、[`SECURITY.md`](SECURITY.md) 和 [`.github/ISSUE_TEMPLATE`](.github/ISSUE_TEMPLATE)。目前没有维护者委员会、社区会议、贡献者晋升机制或支持 SLA；PR 由仓库维护者逐项审阅，不承诺固定响应时间。
 
 源码改动应保留 Apache 2.0 及第三方 NOTICE，避免提交用户 `Data`、个人图标、桌面截图或日志；变更说明应区分本地测试、安装器编译和真实机器验收。
 
@@ -392,6 +396,7 @@ JSON 结构属于应用内部持久化格式，不承诺是稳定的外部 API�
 - 重建选定公开 1.4.0 更新说明中的启动台悬停建组行为。
 - 实现外部应用前台隐藏策略与显式运行应用切换条。
 - 完成 LG 图标、产品元数据、安装脚本和自包含 x64 发布包。
+- 1.4.1 将新安装目录统一为 LG Dsk，并为从旧目录升级增加用户数据校验迁移。
 
 ### 后续候选项（不是已承诺的时间表）
 
@@ -402,12 +407,12 @@ JSON 结构属于应用内部持久化格式，不承诺是稳定的外部 API�
 
 ## 十五、架构决策记录 ADR
 
-### ADR-001：保留 GlassDesk 的应用身份与文件名
+### ADR-001：保留 GlassDesk 的应用身份与文件名，采用 LG Dsk 安装目录
 
-- **背景：**彻底重命名可能破坏单实例身份、资源 URI、安装升级路径和已有用户数据。
-- **备选：**全量改命名空间/EXE/安装 AppId；或仅替换外显品牌。
-- **决策：**保留内部程序集与 EXE 兼容身份，产品元数据、窗口标题、快捷方式与图标显示 LG Dsk。
-- **影响：**迁移风险较低，但进程文件名仍是 `GlassDesk.exe`，内部命名空间仍含 GlassDesk。
+- **背景：**全量重命名可能破坏单实例身份、资源 URI、安装升级和已有数据；继续使用旧默认目录又会让用户看到 GlassDesk 品牌残留。
+- **备选：**全量改命名空间/EXE/安装 AppId；保留旧目录；或保留身份并迁移到品牌目录。
+- **决策：**保留内部程序集、EXE 与安装 AppId，默认路径改为 `%LOCALAPPDATA%\Programs\LG Dsk`；迁移脚本先校验并复制旧 `Data`，再运行旧卸载程序。
+- **影响：**兼容身份和用户数据得到保留；内部技术命名仍含 GlassDesk。若旧安装登记、文件或目录安全检查失败，安装会中止而非强行迁移。
 
 ### ADR-002：前台应用状态决定 Dock 呈现模式
 
@@ -435,6 +440,7 @@ JSON 结构属于应用内部持久化格式，不承诺是稳定的外部 API�
 | 现象 | 原因/处理 |
 | --- | --- |
 | 安装后程序没有新窗口 | 先从托盘彻底退出旧 GlassDesk，再启动 LG Dsk；两者保留相同单实例身份以兼容升级 |
+| 升级时提示迁移未完成 | 不要手动删除旧目录或 `LGDsk-MigrationStaging`；查看 `%TEMP%\LG-Dsk-install-migration.log`。若提示卸载阶段中断，暂存数据需先人工核对，不能盲目重试或清理 |
 | 按快捷键没有切换条 | 检查是否在设置中改键、快捷键是否冲突、是否处于全屏，以及是否有可切换的普通应用窗口 |
 | Windows 显示未知发布者 | 当前程序没有 Authenticode 签名；核对下载来源与 SHA-256。哈希只验证文件一致性，不验证签名者 |
 | 便携版看不到安装版设置 | 便携版在程序旁使用独立 `Data`，不会自动导入已安装版数据；先备份，再用应用内恢复功能迁移 |
@@ -452,7 +458,7 @@ JSON 结构属于应用内部持久化格式，不承诺是稳定的外部 API�
 
 ## 十八、案例研究 Case Studies
 
-当前没有企业部署或第三方用户案例，也没有上线前后效率、成本或故障率数据。唯一明确的设计输入是用户提供的 Windows 桌面场景：高分辨率高刷新率屏幕、GlassDesk 液态玻璃外观、Windows 任务栏自动隐藏，以及鼠标移动到底边误唤 Dock 的问题。该输入用于确定功能需求，不应被解释为独立客户验证或产品市场数据。
+当前没有企业部署或第三方用户案例，也没有上线前后效率、成本或故障率数据。唯一明确的设计输入是用户提供的 Windows 桌面场景：高分辨率高刷新率屏幕、液态玻璃外观、Windows 任务栏自动隐藏，以及鼠标移动到底边误唤 Dock 的问题。该输入用于确定功能需求，不应被解释为独立客户验证或产品市场数据。
 
 ## 十九、许可证与版权 License
 

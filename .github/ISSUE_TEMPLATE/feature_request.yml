@@ -1,0 +1,26 @@
+name: 功能建议
+description: 提出与 LG Dsk 目标一致的改进建议
+title: "feature: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的实际问题
+      description: 描述使用场景、当前阻碍和触发频率。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案
+      description: 描述预期交互和可接受的边界。
+    validations:
+      required: true
+  - type: textarea
+    id: tradeoffs
+    attributes:
+      label: 兼容性或取舍
+      description: 如涉及性能、数据迁移、Windows Shell 或现有设置，请在此说明。
+    validations:
+      required: false
