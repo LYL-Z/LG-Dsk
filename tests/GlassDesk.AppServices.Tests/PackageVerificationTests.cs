@@ -170,7 +170,7 @@ public sealed class PackageVerificationTests : IDisposable
     public void ZIP拒绝重复的大小写不敏感路径()
     {
         var fixture = CandidateFixture.Create(_root);
-        fixture.AddPayloadFile("glassdesk.exe", [0x4D, 0x5A, 0x02]);
+        fixture.AddPayloadFile("lgdsk.exe", [0x4D, 0x5A, 0x02]);
 
         var result = RunVerifier(fixture);
 
@@ -180,6 +180,7 @@ public sealed class PackageVerificationTests : IDisposable
 
     [Theory]
     [InlineData("LICENSE.txt")]
+    [InlineData("DOTNET-RUNTIME-LICENSE.txt")]
     [InlineData("ThirdPartyNotices.txt")]
     [InlineData("WINDOWS-SDK-LICENSE.txt")]
     [InlineData("INNO-SETUP-LICENSE.txt")]
@@ -288,9 +289,11 @@ public sealed class PackageVerificationTests : IDisposable
             WriteReleaseManifest();
             _payload.AddRange(
             [
-                new("GlassDesk.exe", [0x4D, 0x5A, 0x01]),
-                new("LICENSE.txt", Encoding.UTF8.GetBytes("Microsoft .NET Library License")),
+                new("LGDsk.exe", [0x4D, 0x5A, 0x01]),
+                new("LICENSE.txt", Encoding.UTF8.GetBytes("Apache License 2.0")),
+                new("DOTNET-RUNTIME-LICENSE.txt", Encoding.UTF8.GetBytes("Microsoft .NET Library License")),
                 new("ThirdPartyNotices.txt", Encoding.UTF8.GetBytes(".NET third-party notices")),
+                new("LG-Dsk-LICENSE.txt", Encoding.UTF8.GetBytes("Apache License 2.0")),
                 new("WINDOWS-SDK-LICENSE.txt", Encoding.UTF8.GetBytes("Microsoft Windows SDK license")),
                 new("INNO-SETUP-LICENSE.txt", Encoding.UTF8.GetBytes("Inno Setup license")),
                 new("UNICODE-LICENSE.txt", Encoding.UTF8.GetBytes("Unicode license")),
@@ -303,7 +306,7 @@ public sealed class PackageVerificationTests : IDisposable
 
         public string PackageDirectory { get; }
         public string ReleaseManifest { get; }
-        private string PackageBaseName => "GlassDesk-" + AssemblyVersion + "-win-x64";
+        private string PackageBaseName => "LG-Dsk-" + ProductVersion + "-win-x64";
         private string ZipPath => Path.Combine(PackageDirectory, PackageBaseName + ".zip");
         private string SetupPath => Path.Combine(PackageDirectory, PackageBaseName + "-Setup.exe");
         private string PayloadManifestPath => Path.Combine(PackageDirectory, "payload-manifest.json");
@@ -319,7 +322,7 @@ public sealed class PackageVerificationTests : IDisposable
             File.WriteAllText(ReleaseManifest, JsonSerializer.Serialize(new
             {
                 schemaVersion = 1,
-                productName = "GlassDesk",
+                productName = "LG Dsk",
                 productVersion = productVersion ?? ProductVersion,
                 assemblyVersion = AssemblyVersion,
                 fileVersion = FileVersion,
@@ -341,7 +344,7 @@ public sealed class PackageVerificationTests : IDisposable
             File.WriteAllText(BuildReportPath, JsonSerializer.Serialize(new
             {
                 schemaVersion = 1,
-                productName = "GlassDesk",
+                productName = "LG Dsk",
                 productVersion = ProductVersion,
                 assemblyVersion = AssemblyVersion,
                 fileVersion = FileVersion,
@@ -437,7 +440,7 @@ public sealed class PackageVerificationTests : IDisposable
             File.WriteAllText(PayloadManifestPath, JsonSerializer.Serialize(new
             {
                 schemaVersion = 1,
-                productName = "GlassDesk",
+                productName = "LG Dsk",
                 productVersion = ProductVersion,
                 assemblyVersion = AssemblyVersion,
                 fileVersion = FileVersion,
@@ -458,7 +461,7 @@ public sealed class PackageVerificationTests : IDisposable
                 innoInstallerSha256 = "0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f",
                 innoCompilerSha256 = new string('A', 64),
             }));
-            File.WriteAllText(BuildReportPath, JsonSerializer.Serialize(new { schemaVersion = 1, productName = "GlassDesk", productVersion = ProductVersion, assemblyVersion = AssemblyVersion, fileVersion = FileVersion, appId = AppId, rid = "win-x64", status = "Built" }));
+            File.WriteAllText(BuildReportPath, JsonSerializer.Serialize(new { schemaVersion = 1, productName = "LG Dsk", productVersion = ProductVersion, assemblyVersion = AssemblyVersion, fileVersion = FileVersion, appId = AppId, rid = "win-x64", status = "Built" }));
             File.WriteAllText(InnoLicensePath, "Inno Setup license notice");
             RebuildChecksums();
         }

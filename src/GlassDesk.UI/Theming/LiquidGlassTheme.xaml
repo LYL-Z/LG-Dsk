@@ -18,6 +18,7 @@
   <SolidColorBrush x:Key="LiquidControlText" Color="#F7F7FA" />
   <SolidColorBrush x:Key="LiquidControlMuted" Color="#BFC4CC" />
   <SolidColorBrush x:Key="LiquidControlPopup" Color="#EC22242B" />
+  <SolidColorBrush x:Key="LiquidControlSelected" Color="#334F7FA8" />
 
   <Style TargetType="Button">
     <Setter Property="Foreground">
@@ -26,8 +27,8 @@
                  FallbackValue="{StaticResource LiquidControlText}" />
       </Setter.Value>
     </Setter>
-    <Setter Property="Background" Value="{StaticResource LiquidControlFill}" />
-    <Setter Property="BorderBrush" Value="{StaticResource LiquidControlEdge}" />
+    <Setter Property="Background" Value="{DynamicResource LiquidControlFill}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource LiquidControlEdge}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="Padding" Value="10,6" />
     <Setter Property="Cursor" Value="Hand" />
@@ -44,14 +45,14 @@
           </controls:PhoneBorder>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="Chrome" Property="Background" Value="{StaticResource LiquidControlHover}" />
-              <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource LiquidControlEdgeActive}" />
+              <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource LiquidControlHover}" />
+              <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource LiquidControlEdgeActive}" />
             </Trigger>
             <Trigger Property="IsPressed" Value="True">
               <Setter TargetName="Chrome" Property="Opacity" Value="0.76" />
             </Trigger>
             <Trigger Property="IsKeyboardFocused" Value="True">
-              <Setter TargetName="Chrome" Property="BorderBrush" Value="#FF66B5FF" />
+              <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource LiquidControlEdgeActive}" />
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter TargetName="Chrome" Property="Opacity" Value="0.42" />
@@ -69,11 +70,11 @@
                  FallbackValue="{StaticResource LiquidControlText}" />
       </Setter.Value>
     </Setter>
-    <Setter Property="Background" Value="#20FFFFFF" />
-    <Setter Property="BorderBrush" Value="{StaticResource LiquidControlEdge}" />
+    <Setter Property="Background" Value="{DynamicResource LiquidControlFill}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource LiquidControlEdge}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="Padding" Value="9,5" />
-    <Setter Property="CaretBrush" Value="{StaticResource LiquidControlText}" />
+    <Setter Property="CaretBrush" Value="{DynamicResource LiquidControlText}" />
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="TextBox">
@@ -84,8 +85,8 @@
           </controls:PhoneBorder>
           <ControlTemplate.Triggers>
             <Trigger Property="IsKeyboardFocused" Value="True">
-              <Setter TargetName="Chrome" Property="BorderBrush" Value="#FF66B5FF" />
-              <Setter TargetName="Chrome" Property="Background" Value="#2AFFFFFF" />
+              <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource LiquidControlEdgeActive}" />
+              <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource LiquidControlHover}" />
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter TargetName="Chrome" Property="Opacity" Value="0.45" />
@@ -106,10 +107,10 @@
           </controls:PhoneBorder>
           <ControlTemplate.Triggers>
             <Trigger Property="IsHighlighted" Value="True">
-              <Setter TargetName="ItemChrome" Property="Background" Value="#35FFFFFF" />
+              <Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource LiquidControlHover}" />
             </Trigger>
             <Trigger Property="IsSelected" Value="True">
-              <Setter TargetName="ItemChrome" Property="Background" Value="#3E1684FF" />
+              <Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource LiquidControlSelected}" />
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter TargetName="ItemChrome" Property="Opacity" Value="0.42" />
@@ -127,8 +128,8 @@
                  FallbackValue="{StaticResource LiquidControlText}" />
       </Setter.Value>
     </Setter>
-    <Setter Property="Background" Value="{StaticResource LiquidControlFill}" />
-    <Setter Property="BorderBrush" Value="{StaticResource LiquidControlEdge}" />
+    <Setter Property="Background" Value="{DynamicResource LiquidControlFill}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource LiquidControlEdge}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="Padding" Value="10,6" />
     <Setter Property="MinHeight" Value="32" />
@@ -148,7 +149,7 @@
                       <ContentPresenter Grid.Column="0" Content="{Binding SelectionBoxItem, RelativeSource={RelativeSource AncestorType={x:Type ComboBox}}}"
                                         ContentTemplate="{Binding SelectionBoxItemTemplate, RelativeSource={RelativeSource AncestorType={x:Type ComboBox}}}"
                                         VerticalAlignment="Center" />
-                      <Path Grid.Column="1" Data="M 1,2 L 5,6 L 9,2" Stroke="{StaticResource LiquidControlText}"
+                      <Path Grid.Column="1" Data="M 1,2 L 5,6 L 9,2" Stroke="{DynamicResource LiquidControlText}"
                             StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                             HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Grid>
@@ -159,9 +160,9 @@
             <Popup x:Name="PART_Popup" Placement="Bottom" Focusable="False" AllowsTransparency="True"
                    PlacementTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}"
                    IsOpen="{TemplateBinding IsDropDownOpen}" PopupAnimation="Fade">
-              <controls:PhoneBorder Margin="0,5,0,0" Background="#FF22242B"
+              <controls:PhoneBorder Margin="0,5,0,0" Background="{DynamicResource LiquidControlPopup}"
                       MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
-                      BorderBrush="{StaticResource LiquidControlEdge}" BorderThickness="1" CornerRadius="14" Padding="5">
+                      BorderBrush="{DynamicResource LiquidControlEdge}" BorderThickness="1" CornerRadius="14" Padding="5">
                 <ScrollViewer Foreground="{TemplateBinding Foreground}"
                               MaxHeight="{TemplateBinding MaxDropDownHeight}" SnapsToDevicePixels="True">
                   <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained" />
@@ -192,10 +193,10 @@
             <ContentPresenter />
           </controls:PhoneBorder>
           <ControlTemplate.Triggers>
-            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ItemChrome" Property="Background" Value="#22FFFFFF" /></Trigger>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource LiquidControlHover}" /></Trigger>
             <Trigger Property="IsSelected" Value="True">
-              <Setter TargetName="ItemChrome" Property="Background" Value="#361684FF" />
-              <Setter TargetName="ItemChrome" Property="BorderBrush" Value="#641684FF" />
+              <Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource LiquidControlSelected}" />
+              <Setter TargetName="ItemChrome" Property="BorderBrush" Value="{DynamicResource LiquidControlEdgeActive}" />
               <Setter TargetName="ItemChrome" Property="BorderThickness" Value="1" />
             </Trigger>
           </ControlTemplate.Triggers>
@@ -211,8 +212,8 @@
                  FallbackValue="{StaticResource LiquidControlText}" />
       </Setter.Value>
     </Setter>
-    <Setter Property="Background" Value="#0FFFFFFF" />
-    <Setter Property="BorderBrush" Value="#30FFFFFF" />
+    <Setter Property="Background" Value="{DynamicResource LiquidControlFill}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource LiquidControlEdge}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="Padding" Value="5" />
     <Setter Property="Template">
@@ -241,7 +242,7 @@
         <ControlTemplate TargetType="CheckBox">
           <DockPanel LastChildFill="True" VerticalAlignment="Center">
             <controls:PhoneBorder x:Name="CheckChrome" DockPanel.Dock="Left" Width="20" Height="20" Margin="0,0,9,0"
-                    Background="#16FFFFFF" BorderBrush="{StaticResource LiquidControlEdge}" BorderThickness="1" CornerRadius="7">
+                    Background="{DynamicResource LiquidControlFill}" BorderBrush="{DynamicResource LiquidControlEdge}" BorderThickness="1" CornerRadius="7">
               <TextBlock x:Name="CheckGlyph" Text="✓" FontSize="13" FontWeight="SemiBold" Foreground="White"
                          HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed" />
             </controls:PhoneBorder>
@@ -249,11 +250,11 @@
           </DockPanel>
           <ControlTemplate.Triggers>
             <Trigger Property="IsChecked" Value="True">
-              <Setter TargetName="CheckChrome" Property="Background" Value="#CC1684FF" />
-              <Setter TargetName="CheckChrome" Property="BorderBrush" Value="#CC91CAFF" />
+              <Setter TargetName="CheckChrome" Property="Background" Value="{DynamicResource LiquidControlAccent}" />
+              <Setter TargetName="CheckChrome" Property="BorderBrush" Value="{DynamicResource LiquidControlEdgeActive}" />
               <Setter TargetName="CheckGlyph" Property="Visibility" Value="Visible" />
             </Trigger>
-            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="CheckChrome" Property="BorderBrush" Value="{StaticResource LiquidControlEdgeActive}" /></Trigger>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="CheckChrome" Property="BorderBrush" Value="{DynamicResource LiquidControlEdgeActive}" /></Trigger>
             <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45" /></Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
@@ -262,9 +263,9 @@
   </Style>
 
   <Style TargetType="ContextMenu">
-    <Setter Property="Foreground" Value="{StaticResource LiquidControlText}" />
-    <Setter Property="Background" Value="{StaticResource LiquidControlPopup}" />
-    <Setter Property="BorderBrush" Value="{StaticResource LiquidControlEdge}" />
+    <Setter Property="Foreground" Value="{DynamicResource LiquidControlText}" />
+    <Setter Property="Background" Value="{DynamicResource LiquidControlPopup}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource LiquidControlEdge}" />
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="ContextMenu">
@@ -278,7 +279,7 @@
   </Style>
 
   <Style TargetType="MenuItem">
-    <Setter Property="Foreground" Value="{StaticResource LiquidControlText}" />
+    <Setter Property="Foreground" Value="{DynamicResource LiquidControlText}" />
     <Setter Property="Padding" Value="10,7" />
     <Setter Property="Template">
       <Setter.Value>
@@ -289,14 +290,14 @@
             </controls:PhoneBorder>
             <Popup x:Name="PART_Popup" Placement="Right" Focusable="False" AllowsTransparency="True"
                    IsOpen="{TemplateBinding IsSubmenuOpen}">
-              <controls:PhoneBorder Background="{StaticResource LiquidControlPopup}" BorderBrush="{StaticResource LiquidControlEdge}"
+              <controls:PhoneBorder Background="{DynamicResource LiquidControlPopup}" BorderBrush="{DynamicResource LiquidControlEdge}"
                       BorderThickness="1" CornerRadius="14" Padding="6">
                 <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle" />
               </controls:PhoneBorder>
             </Popup>
           </Grid>
           <ControlTemplate.Triggers>
-            <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="ItemChrome" Property="Background" Value="#35FFFFFF" /></Trigger>
+            <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource LiquidControlHover}" /></Trigger>
             <Trigger Property="IsEnabled" Value="False"><Setter TargetName="ItemChrome" Property="Opacity" Value="0.4" /></Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
@@ -305,9 +306,9 @@
   </Style>
 
   <Style TargetType="ToolTip">
-    <Setter Property="Background" Value="{StaticResource LiquidControlPopup}" />
-    <Setter Property="Foreground" Value="{StaticResource LiquidControlText}" />
-    <Setter Property="BorderBrush" Value="{StaticResource LiquidControlEdge}" />
+    <Setter Property="Background" Value="{DynamicResource LiquidControlPopup}" />
+    <Setter Property="Foreground" Value="{DynamicResource LiquidControlText}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource LiquidControlEdge}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="Padding" Value="9,6" />
     <Setter Property="Template">

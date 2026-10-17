@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO;
+using System.Reflection;
 using System.Text;
 using GlassDesk.Core.Storage;
 using GlassDesk.Platform;
@@ -33,10 +34,12 @@ internal static class SelfTest
         var report = new StringBuilder();
         var failures = 0;
 
-        report.AppendLine("GlassDesk 自检");
+        report.AppendLine("LG Dsk 自检");
         report.AppendLine(new string('=', 46));
         report.AppendLine(CultureInfo.InvariantCulture, $"时间：{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz}");
-        report.AppendLine(CultureInfo.InvariantCulture, $"产品版本：{typeof(SelfTest).Assembly.GetName().Version}");
+        var productVersion = typeof(SelfTest).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion.Split('+')[0].Split('-')[0] ?? "未知";
+        report.AppendLine(CultureInfo.InvariantCulture, $"产品版本：{productVersion}");
         report.AppendLine(CultureInfo.InvariantCulture, $"运行时：{Environment.Version}");
         report.AppendLine(CultureInfo.InvariantCulture, $"进程架构：{System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}");
         report.AppendLine();

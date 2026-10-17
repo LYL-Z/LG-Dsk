@@ -6,6 +6,7 @@ namespace GlassDesk.UI.Controls;
 /// <summary>The ordered visible desktop scene, excluding our own glass and popup HWNDs.</summary>
 internal sealed class GlassBackdropScene : IEquatable<GlassBackdropScene>
 {
+    private const long TransientOverlayStyleMask = 0x800A0;
     internal readonly record struct SceneWindow(nint Handle, uint ProcessId, int Left, int Top, int Right, int Bottom,
         bool IsTransientOverlay = false);
     private readonly SceneWindow[] _windows;
@@ -33,12 +34,18 @@ internal sealed class GlassBackdropScene : IEquatable<GlassBackdropScene>
                 || rect.Left >= area.Right || rect.Top >= area.Bottom)) return true;
             // Layered, pointer-transparent tool windows (for example driver HUDs)
             // are transient overlays, not ordinary application content windows.
-            var transientOverlay = (GetWindowLongPtr(handle, -20).ToInt64() & 0x800a0) == 0x800a0;
+            var transientOverlay = IsTransientOverlay(handle);
             windows.Add(new(handle, process, rect.Left, rect.Top, rect.Right, rect.Bottom, transientOverlay));
             return true;
         }, 0);
         return enumerated && complete ? new(windows.ToArray()) : null;
     }
+
+    internal static bool IsTransientOverlay(nint handle) =>
+        IsTransientOverlayStyle(GetWindowLongPtr(handle, -20).ToInt64());
+
+    internal static bool IsTransientOverlayStyle(long extendedStyle) =>
+        (extendedStyle & TransientOverlayStyleMask) == TransientOverlayStyleMask;
 
     internal bool CanRetainMaterialFrom(GlassBackdropScene? previous) => previous is not null
         && _recoveryGeneration == previous._recoveryGeneration

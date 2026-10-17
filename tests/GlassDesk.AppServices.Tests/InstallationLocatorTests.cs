@@ -18,7 +18,7 @@ public sealed class InstallationLocatorTests : IDisposable
         Directory.CreateDirectory(_tempRoot);
         _installDirectory = Path.Combine(_tempRoot, "install");
         Directory.CreateDirectory(_installDirectory);
-        _installedExe = Path.Combine(_installDirectory, "GlassDesk.exe");
+        _installedExe = Path.Combine(_installDirectory, "LGDsk.exe");
         _uninstaller = Path.Combine(_installDirectory, "unins000.exe");
         _runnerExe = Environment.ProcessPath ?? throw new InvalidOperationException("Test runner executable path is unavailable.");
         File.Copy(_runnerExe, _installedExe);
@@ -60,7 +60,7 @@ public sealed class InstallationLocatorTests : IDisposable
     public void Executable_outside_registered_install_directory_is_a_mismatch()
     {
         WriteRegistration(_installDirectory, $"\"{_uninstaller}\"");
-        var otherExe = Path.Combine(_tempRoot, "GlassDesk.exe");
+        var otherExe = Path.Combine(_tempRoot, "LGDsk.exe");
         File.Copy(_runnerExe, otherExe);
 
         var result = Locator().Inspect(otherExe);

@@ -354,6 +354,7 @@ internal sealed partial class AppHost : IDisposable
         _launcher.ContainerAnchorProvider = () => _dock?.GetLauncherButtonPixelBounds();
         _launcher.IsVisibleChanged += (_, e) => _dock?.SetLauncherContainerState(e.NewValue is true);
         _settings = new SettingsWindow();
+        _settings.IsVisibleChanged += (_, e) => _dock?.SetSettingsWindowVisible(e.NewValue is true);
         _settings.BindPrimaryDisplay(primaryDisplay);
 
         _settings.AttachDataStore(_data!, _loadReport);
@@ -541,7 +542,7 @@ internal sealed partial class AppHost : IDisposable
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
             Title = "导出背景诊断（不包含屏幕画面）", Filter = "JSON 报告|*.json",
-            FileName = "GlassDesk-background-diagnostics.json", AddExtension = true, DefaultExt = ".json"
+            FileName = "LG-Dsk-background-diagnostics.json", AddExtension = true, DefaultExt = ".json"
         };
         if (dialog.ShowDialog() != true) return;
         try { GlassDesk.UI.BackdropRecovery.ExportDiagnosticReport(dialog.FileName); }
@@ -639,8 +640,8 @@ internal sealed partial class AppHost : IDisposable
 
         var lines = new List<string>
         {
-            $"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}] GlassDesk 启动",
-            $"  版本：{typeof(AppHost).Assembly.GetName().Version}",
+            $"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}] LG Dsk 启动",
+            $"  版本：{ProductVersion}",
             $"  数据目录：{_data.Paths.RootDirectory}",
             $"  {WindowsCapabilities.Describe()}",
             $"  {ThemeService.Current?.Describe()}",

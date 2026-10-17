@@ -32,6 +32,8 @@ public sealed class GlassDeskSettings
 
     public DesktopTaskbarSettings DesktopTaskbar { get; set; } = new();
 
+    public UpdateSettings Updates { get; set; } = new();
+
     /// <summary>
     /// 把为 null 的节替换为默认值。反序列化手工编辑过或写入不完整的
     /// 文件时，某个节可能为 null，尽管类型声明并非如此；
@@ -46,6 +48,7 @@ public sealed class GlassDeskSettings
         Display ??= new DisplaySettings();
         Performance ??= new PerformanceSettings();
         DesktopTaskbar ??= new DesktopTaskbarSettings();
+        Updates ??= new UpdateSettings();
         Dock.AutoHide = false;
         Dock.EdgeRevealEnabled = false;
         Launcher.FullscreenMode = false;

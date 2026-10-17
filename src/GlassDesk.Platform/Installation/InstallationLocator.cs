@@ -42,7 +42,7 @@ public sealed class InstallationLocator
     {
         if (string.IsNullOrWhiteSpace(executablePath))
         {
-            return Mismatch("当前 GlassDesk 可执行文件路径不可用。");
+            return Mismatch("当前 LG Dsk 可执行文件路径不可用。");
         }
 
         RegistryKey? key;
@@ -52,7 +52,7 @@ public sealed class InstallationLocator
         }
         catch (Exception ex) when (IsRegistryFailure(ex))
         {
-            return Mismatch("无法读取当前用户的 GlassDesk 安装登记：" + ex.Message);
+            return Mismatch("无法读取当前用户的 LG Dsk 安装登记：" + ex.Message);
         }
 
         if (key is null)
@@ -80,9 +80,9 @@ public sealed class InstallationLocator
                 var installDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installValue));
                 var executable = Path.GetFullPath(executablePath);
                 if (!PathsEqual(Path.GetDirectoryName(executable) ?? string.Empty, installDirectory)
-                    || !string.Equals(Path.GetFileName(executable), "GlassDesk.exe", StringComparison.OrdinalIgnoreCase))
+                    || !string.Equals(Path.GetFileName(executable), "LGDsk.exe", StringComparison.OrdinalIgnoreCase))
                 {
-                    return Mismatch("当前进程不在登记的 GlassDesk 安装目录中。");
+                    return Mismatch("当前进程不在登记的 LG Dsk 安装目录中。");
                 }
 
                 if (!Directory.Exists(installDirectory) || !File.Exists(executable)
@@ -104,14 +104,14 @@ public sealed class InstallationLocator
                     || !HasNoReparsePointInPath(uninstaller)
                     || !IsPortableExecutable(uninstaller))
                 {
-                    return Mismatch("卸载程序不存在，或不属于当前 GlassDesk 安装目录。");
+                    return Mismatch("卸载程序不存在，或不属于当前 LG Dsk 安装目录。");
                 }
 
                 return new InstallationInfo(InstallationState.VerifiedInstalled, installDirectory, uninstaller);
             }
             catch (Exception ex) when (IsRegistryFailure(ex) || ex is IOException or ArgumentException or NotSupportedException)
             {
-                return Mismatch("GlassDesk 安装登记无法安全核验：" + ex.Message);
+                return Mismatch("LG Dsk 安装登记无法安全核验：" + ex.Message);
             }
         }
     }

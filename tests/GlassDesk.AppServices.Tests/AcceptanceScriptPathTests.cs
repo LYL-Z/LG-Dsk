@@ -173,6 +173,9 @@ public sealed class AcceptanceScriptPathTests : IDisposable
         var stage = Path.Combine(_root, "package-stage");
         Directory.CreateDirectory(stage);
         File.Copy(
+            Path.Combine(repository.FullName, "LICENSE"),
+            Path.Combine(stage, "LICENSE.txt"));
+        File.Copy(
             Path.Combine(repository.FullName, "docs", "third-party", "unicode-license-v3.txt"),
             Path.Combine(stage, "UNICODE-LICENSE.txt"));
         const string command = """
@@ -190,7 +193,7 @@ public sealed class AcceptanceScriptPathTests : IDisposable
                     Invoke-Expression $definition.Extent.Text
                 }
                 $repoRoot = $env:GD_TEST_REPO
-                $required = @('LICENSE.txt', 'ThirdPartyNotices.txt', 'WINDOWS-SDK-LICENSE.txt', 'INNO-SETUP-LICENSE.txt', 'UNICODE-LICENSE.txt', 'THIRD-PARTY-NOTICES.md', 'RELEASE-NOTES.md')
+                $required = @('LICENSE.txt', 'DOTNET-RUNTIME-LICENSE.txt', 'ThirdPartyNotices.txt', 'WINDOWS-SDK-LICENSE.txt', 'INNO-SETUP-LICENSE.txt', 'UNICODE-LICENSE.txt', 'THIRD-PARTY-NOTICES.md', 'RELEASE-NOTES.md')
                 Assert-RequiredLicenseSources -DotnetRoot $env:GD_TEST_DOTNET_ROOT -Stage $env:GD_TEST_STAGE
                 foreach ($name in $required) {
                     if (-not (Test-Path -LiteralPath (Join-Path $env:GD_TEST_STAGE $name) -PathType Leaf)) { throw "Missing staged license or notice: $name" }

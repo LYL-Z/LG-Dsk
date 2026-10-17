@@ -250,8 +250,17 @@ try {
     Copy-Item -LiteralPath (Join-Path $repoRoot 'docs/third-party/unicode-license-v3.txt') `
         -Destination (Join-Path $OutputDirectory 'UNICODE-LICENSE.txt') -Force
 
-    $exe = Join-Path $OutputDirectory 'GlassDesk.exe'
-    if (-not (Test-Path $exe)) { throw "Expected GlassDesk.exe was not produced." }
+    $legacyExe = Join-Path $OutputDirectory 'GlassDesk.exe'
+    $exe = Join-Path $OutputDirectory 'LGDsk.exe'
+    if ((Test-Path -LiteralPath $legacyExe) -and -not (Test-Path -LiteralPath $exe)) {
+        Move-Item -LiteralPath $legacyExe -Destination $exe
+    }
+    if (-not (Test-Path -LiteralPath $exe)) { throw "Expected LGDsk.exe was not produced." }
+    $legacyIcon = Join-Path $OutputDirectory 'GlassDesk.ico'
+    $icon = Join-Path $OutputDirectory 'LGDsk.ico'
+    if ((Test-Path -LiteralPath $legacyIcon) -and -not (Test-Path -LiteralPath $icon)) {
+        Move-Item -LiteralPath $legacyIcon -Destination $icon
+    }
 
     $size = (Get-ChildItem $OutputDirectory -Recurse -File | Measure-Object -Property Length -Sum).Sum
     $fileCount = (Get-ChildItem $OutputDirectory -Recurse -File).Count

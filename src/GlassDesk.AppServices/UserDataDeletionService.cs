@@ -101,7 +101,7 @@ public sealed class UserDataDeletionService
         {
             return new UserDataDeletionResult(
                 UserDataDeletionStatus.Busy,
-                Error: "GlassDesk 数据仍被运行中的实例使用，或当前文件夹无法取得独占租约。请先退出其它 GlassDesk 实例后重试。");
+                Error: "LG Dsk 数据仍被运行中的实例使用，或当前文件夹无法取得独占租约。请先退出其它 LG Dsk 实例后重试。");
         }
 
         using (lease)

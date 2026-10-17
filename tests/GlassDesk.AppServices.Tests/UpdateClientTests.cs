@@ -7,12 +7,12 @@ namespace GlassDesk.AppServices.Tests;
 
 public sealed class UpdateClientTests
 {
-    private static readonly Uri Source = new("https://api.github.com/repos/everlosttime/glassdesk-updates/releases/latest");
+    private static readonly Uri Source = new("https://api.github.com/repos/LYL-Z/LG-Dsk/releases/latest");
     private static string Fixture(string version = "0.2.10", string digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", long size = 4) => $$"""
         {"tag_name":"v{{version}}","draft":false,"prerelease":false,"body":"更新说明",
-        "html_url":"https://github.com/everlosttime/glassdesk-updates/releases/tag/v{{version}}",
-        "assets":[{"name":"GlassDesk-{{version}}-win-x64-Setup.exe","state":"uploaded","size":{{size}},"digest":"{{digest}}",
-        "browser_download_url":"https://github.com/everlosttime/glassdesk-updates/releases/download/v{{version}}/GlassDesk-{{version}}-win-x64-Setup.exe"}]}
+        "html_url":"https://github.com/LYL-Z/LG-Dsk/releases/tag/v{{version}}",
+        "assets":[{"name":"LG-Dsk-{{version}}-win-x64-Setup.exe","state":"uploaded","size":{{size}},"digest":"{{digest}}",
+        "browser_download_url":"https://github.com/LYL-Z/LG-Dsk/releases/download/v{{version}}/LG-Dsk-{{version}}-win-x64-Setup.exe"}]}
         """;
 
     [Fact]
@@ -22,7 +22,7 @@ public sealed class UpdateClientTests
         Assert.NotNull(release);
         Assert.Equal(new Version(0, 2, 10), release.Version);
         Assert.Equal("更新说明", release.Notes);
-        Assert.Equal("GlassDesk-0.2.10-win-x64-Setup.exe", release.FileName);
+        Assert.Equal("LG-Dsk-0.2.10-win-x64-Setup.exe", release.FileName);
     }
 
     [Theory]
@@ -46,8 +46,8 @@ public sealed class UpdateClientTests
         Assert.Throws<InvalidDataException>(() => UpdateClient.ParseRelease(Fixture(version), new Version(0, 2, 9), Source));
 
     [Theory]
-    [InlineData("https://github.com/everlosttime/glassdesk-updates/releases/download/", "https://evil.example/releases/download/")]
-    [InlineData("https://github.com/everlosttime/glassdesk-updates/releases/download/", "http://github.com/everlosttime/glassdesk-updates/releases/download/")]
+    [InlineData("https://github.com/LYL-Z/LG-Dsk/releases/download/", "https://evil.example/releases/download/")]
+    [InlineData("https://github.com/LYL-Z/LG-Dsk/releases/download/", "http://github.com/LYL-Z/LG-Dsk/releases/download/")]
     [InlineData("\"state\":\"uploaded\"", "\"state\":\"new\"")]
     [InlineData("\"digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"", "\"digest\":null")]
     [InlineData("\"size\":4", "\"size\":0")]

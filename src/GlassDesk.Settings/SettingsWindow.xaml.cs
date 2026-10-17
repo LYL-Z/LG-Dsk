@@ -25,6 +25,8 @@ namespace GlassDesk.Settings;
 public partial class SettingsWindow : GlassWindow
 {
     protected override bool UseOpaquePanel => true;
+    protected override GlassPalette ResolveWindowPalette(GlassPalette inheritedPalette) =>
+        GlassPalette.CreateClaudeInspiredSettings();
 
     public static readonly DependencyProperty PlannedPagesProperty = DependencyProperty.Register(
         nameof(PlannedPages),
@@ -55,7 +57,6 @@ public partial class SettingsWindow : GlassWindow
         {
             InitializeComponent();
             AutostartCheck.IsEnabled = false;
-            Title = "GlassDesk - Capture Acceptance 20261007";
         }
         finally
         {
@@ -110,6 +111,7 @@ public partial class SettingsWindow : GlassWindow
         LoadAppearanceControls();
         LoadInteractionControls();
         LoadPerformanceControls();
+        LoadUpdateControls();
         LoadDesktopStatus();
         RefreshDiagnostics(loadReport);
     }

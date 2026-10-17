@@ -131,6 +131,19 @@ public sealed class GlassPalette
             secondaryForeground: Color.FromArgb(0xB3, 0x1C, 0x1C, 0x1E));
     }
 
+    /// <summary>A warm, opaque settings palette inspired by Claude's editorial color language.</summary>
+    /// <remarks>This is an original derivative treatment, not Anthropic artwork or an official product theme.</remarks>
+    public static GlassPalette CreateClaudeInspiredSettings() => new(
+        isDark: false,
+        accent: Color.FromRgb(0xC9, 0x6F, 0x52),
+        acrylicOverlay: Color.FromArgb(0, 0xFB, 0xF7, 0xEF),
+        fallbackPanel: Color.FromRgb(0xF7, 0xF2, 0xE9),
+        acrylicTint: Color.FromRgb(0xF7, 0xF2, 0xE9),
+        acrylicTintAlpha: 0xFF,
+        panelBorder: Color.FromRgb(0xDD, 0xD0, 0xC0),
+        foreground: Color.FromRgb(0x32, 0x2B, 0x27),
+        secondaryForeground: Color.FromRgb(0x78, 0x6D, 0x62));
+
     /// <summary>
     /// 解析 <c>#RRGGBB</c> 或 <c>#AARRGGBB</c>，失败时回退到默认强调色，
     /// 免得手工改坏的设置让界面完全没有颜色可用。

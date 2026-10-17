@@ -16,7 +16,7 @@ public sealed class PortableUserDataDeletionTests : IDisposable
         var store = new GlassDeskDataStore(paths);
         store.LoadAll();
         File.WriteAllText(Path.Combine(paths.RootDirectory, "private.txt"), "old profile");
-        var program = Path.Combine(_installation, "GlassDesk.exe");
+        var program = Path.Combine(_installation, "LGDsk.exe");
         var neighbor = Path.Combine(_installation, "Data-other", "keep.bin");
         Directory.CreateDirectory(Path.GetDirectoryName(neighbor)!);
         byte[] bytes = [0, 255, 19, 37];

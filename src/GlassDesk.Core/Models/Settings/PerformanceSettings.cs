@@ -4,4 +4,7 @@ namespace GlassDesk.Core.Models.Settings;
 public sealed class PerformanceSettings
 {
     public bool AutoSuspendWhenFullscreen { get; set; } = true;
+
+    /// <summary>Show a compact application island when the taskbar auto-hides during a fullscreen session.</summary>
+    public bool ShowFullscreenAppIsland { get; set; } = true;
 }

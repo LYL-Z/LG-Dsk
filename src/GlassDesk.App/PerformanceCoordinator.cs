@@ -10,6 +10,7 @@ internal sealed class PerformanceCoordinator
     private static readonly TimeSpan KeepWarmDelay = TimeSpan.FromSeconds(5);
     private bool _observedFullscreen, _stableFullscreen;
     private bool _dockVisible = true, _launcherVisible, _temporaryActivation;
+    private bool _appAwarenessSurfaceRequested;
     private bool _sessionSuspended;
     private DateTimeOffset? _fullscreenDeadline, _hiddenSince;
 
@@ -19,8 +20,10 @@ internal sealed class PerformanceCoordinator
     public long Generation { get; private set; }
     public bool AutoSuspend { get; private set; } = true;
     public bool ManualSleep { get; private set; }
+    public bool IsSessionSuspended => _sessionSuspended;
     public bool IsSuppressionRequested => ManualSleep || _sessionSuspended || AutoSuspend && _stableFullscreen;
     public bool IsTemporaryActivation => _temporaryActivation;
+    public bool IsAppAwarenessSurfaceRequested => _appAwarenessSurfaceRequested;
     public DateTimeOffset? NextTransitionAt
     {
         get
@@ -62,7 +65,17 @@ internal sealed class PerformanceCoordinator
     public void SetSessionSuspended(bool suspended, DateTimeOffset now)
     {
         _sessionSuspended = suspended;
-        if (suspended) _temporaryActivation = false;
+        if (suspended)
+        {
+            _temporaryActivation = false;
+            _appAwarenessSurfaceRequested = false;
+        }
+        Advance(now);
+    }
+
+    public void SetAppAwarenessSurfaceRequested(bool requested, DateTimeOffset now)
+    {
+        _appAwarenessSurfaceRequested = requested;
         Advance(now);
     }
 
@@ -101,9 +114,15 @@ internal sealed class PerformanceCoordinator
             _stableFullscreen = _observedFullscreen;
             _fullscreenDeadline = null;
         }
-        if (IsSuppressionRequested && !_temporaryActivation || _sessionSuspended)
+        if (IsSuppressionRequested && !_temporaryActivation && !_appAwarenessSurfaceRequested || _sessionSuspended)
         {
             Transition(PerformanceState.Sleeping);
+            return;
+        }
+        if (_appAwarenessSurfaceRequested)
+        {
+            _hiddenSince = null;
+            Transition(PerformanceState.TemporaryActive);
             return;
         }
         if (_dockVisible || _launcherVisible || _temporaryActivation)

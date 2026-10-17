@@ -215,7 +215,7 @@ try {
     # The self-check is the automated form of the "starts and exits cleanly" requirement: it
     # reports the OS build, which glass capabilities are available, where data is stored, and
     # whether that data is healthy. Exit code 0 means every check passed.
-    $selfTest = Join-Path $repoRoot "src/GlassDesk.App/bin/$Configuration/net10.0-windows/GlassDesk.exe"
+    $selfTest = Join-Path $repoRoot "src/GlassDesk.App/bin/$Configuration/net10.0-windows10.0.26100.0/GlassDesk.exe"
     if (Test-Path $selfTest) {
         $selfTestExit = Invoke-WaitingProcess -FilePath $selfTest -WorkingDirectory $repoRoot -Arguments @(
             '--selftest', '--acceptance-data-root', (New-AcceptanceDataRoot 'selftest'),

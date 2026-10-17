@@ -49,7 +49,7 @@ public partial class App : Application, IDisposable
         var options = CommandLineOptions.Parse(e.Args);
         if (!GlassDesk.Platform.WindowsCapabilities.IsSupported)
         {
-            MessageBox.Show("此测试版本需要 Windows 11（Build 22000 及以上）。", "GlassDesk", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show("此版本需要 Windows 11（Build 22000 及以上）。", "LG Dsk", MessageBoxButton.OK, MessageBoxImage.Information);
             Shutdown(2); return;
         }
         System.Windows.Media.Effects.PixelShader.InvalidPixelShaderEncountered += OnBackdropShaderFailure;

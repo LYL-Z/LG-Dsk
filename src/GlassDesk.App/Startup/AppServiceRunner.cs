@@ -74,7 +74,7 @@ internal static class AppServiceRunner
                 return ShowDesktopProbe.Run(paths);
         }
 
-        report.AppendLine("GlassDesk 应用库命令");
+        report.AppendLine("LG Dsk 应用库命令");
         report.AppendLine(new string('=', 46));
         report.AppendLine(CultureInfo.InvariantCulture, $"命令：{DescribeVerb(options.Verb)}");
         report.AppendLine(CultureInfo.InvariantCulture, $"时间：{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz}");

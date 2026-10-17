@@ -111,6 +111,17 @@ public sealed class RunningAppTracker : IDisposable
 
     /// <summary>立即重新枚举并刷新状态；返回本次枚举到的窗口数。</summary>
     public int Reconcile()
+        => ReconcileCore(force: false, allowWhileSuspended: false);
+
+    /// <summary>
+    /// Refreshes the window snapshot in response to an explicit user request or while the
+    /// lightweight fullscreen application island is visible. It bypasses event throttling
+    /// without changing the tracker's suspension policy.
+    /// </summary>
+    public int ReconcileOnDemand()
+        => ReconcileCore(force: true, allowWhileSuspended: true);
+
+    private int ReconcileCore(bool force, bool allowWhileSuspended)
     {
         if (_disposed)
         {
@@ -120,10 +131,10 @@ public sealed class RunningAppTracker : IDisposable
         long generation;
         lock (_sync)
         {
-            if (_suspended) { _dirty = true; return _windows.Count; }
+            if (_suspended && !allowWhileSuspended) { _dirty = true; return _windows.Count; }
             // 与上次调和贴得太近就跳过：事件合并（120 毫秒）之后仍可能
             // 有成串的通知，重复的全量枚举没有意义。
-            if (DateTime.UtcNow - _lastReconcileUtc < MinimumReconcileInterval)
+            if (!force && DateTime.UtcNow - _lastReconcileUtc < MinimumReconcileInterval)
             {
                 return _windows.Count;
             }
@@ -137,7 +148,7 @@ public sealed class RunningAppTracker : IDisposable
 
         lock (_sync)
         {
-            if (_disposed || _suspended || generation != _runtimeGeneration)
+            if (_disposed || _suspended && !allowWhileSuspended || generation != _runtimeGeneration)
             { _dirty = true; return _windows.Count; }
             _dirty = false;
             _reconcileCount++;

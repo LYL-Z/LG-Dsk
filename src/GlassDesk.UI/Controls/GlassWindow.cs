@@ -466,8 +466,7 @@ public abstract class GlassWindow : Window
         var appearance = theme?.Appearance;
 
         var palette = theme?.Palette ?? Palette ?? GlassPalette.Create(true, GlassPalette.DefaultAccent, false);
-        if (UseOpaquePanel)
-            palette = GlassPalette.Create(true, palette.Accent, true);
+        palette = ResolveWindowPalette(palette);
         Palette = palette;
 
         if (appearance is not null)
@@ -481,6 +480,10 @@ public abstract class GlassWindow : Window
         UpdateGlassClip();
         _shadow?.Update();
     }
+
+    /// <summary>Lets a window keep its own readable identity without changing the shared Dock theme.</summary>
+    protected virtual GlassPalette ResolveWindowPalette(GlassPalette inheritedPalette) =>
+        UseOpaquePanel ? GlassPalette.Create(true, inheritedPalette.Accent, true) : inheritedPalette;
 
     /// <summary>
     /// 把四个圆角缺口从窗口的可绘制区域里挖掉，让它们成为**真正的 alpha 0**。

@@ -15,6 +15,8 @@ public partial class SettingsWindow
         {
             AutoSuspendWhenFullscreenCheck.IsChecked = _dataStore?.Settings.Current.Performance.AutoSuspendWhenFullscreen ?? true;
             AutoSuspendWhenFullscreenCheck.IsEnabled = _dataStore is not null;
+            FullscreenAppIslandCheck.IsChecked = _dataStore?.Settings.Current.Performance.ShowFullscreenAppIsland ?? true;
+            FullscreenAppIslandCheck.IsEnabled = _dataStore is not null;
         }
         finally { _loadingPerformanceControls = false; }
     }
@@ -26,7 +28,11 @@ public partial class SettingsWindow
         var previous = current.Performance;
         try
         {
-            current.Performance = new PerformanceSettings { AutoSuspendWhenFullscreen = AutoSuspendWhenFullscreenCheck.IsChecked == true };
+            current.Performance = new PerformanceSettings
+            {
+                AutoSuspendWhenFullscreen = AutoSuspendWhenFullscreenCheck.IsChecked == true,
+                ShowFullscreenAppIsland = FullscreenAppIslandCheck.IsChecked == true,
+            };
             _dataStore.Settings.Save();
         }
         catch (Exception error)
@@ -37,6 +43,6 @@ public partial class SettingsWindow
             return;
         }
         PerformanceSettingsChanged?.Invoke(this, EventArgs.Empty);
-        PerformanceSettingsStatus.Text = "已保存并应用。窗口化游戏可在托盘手动启用游戏休眠。";
+        PerformanceSettingsStatus.Text = "已保存并应用。应用岛只在任务栏自动隐藏且前台处于全屏时出现；可在这里关闭。";
     }
 }

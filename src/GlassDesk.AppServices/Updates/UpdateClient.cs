@@ -57,7 +57,7 @@ public sealed partial class UpdateClient
             // Compare product version, not the intentionally stable assembly identity (0.2.2.0).
             var installed = new Version(current.Major, current.Minor, Math.Max(0, current.Build));
             if (version <= installed) return null;
-            var fileName = $"GlassDesk-{version}-win-x64-Setup.exe";
+            var fileName = $"LG-Dsk-{version}-win-x64-Setup.exe";
             var assets = root.GetProperty("assets").EnumerateArray()
                 .Where(asset => asset.GetProperty("name").GetString() == fileName).ToArray();
             if (assets.Length != 1) throw new InvalidDataException("此版本没有唯一的 Windows x64 安装包。");
@@ -144,7 +144,7 @@ public sealed partial class UpdateClient
     internal static void ValidateInstaller(UpdateRelease release)
     {
         if (!StableVersionPattern().IsMatch(release.Version.ToString())
-            || release.FileName != $"GlassDesk-{release.Version}-win-x64-Setup.exe"
+            || release.FileName != $"LG-Dsk-{release.Version}-win-x64-Setup.exe"
             || !DigestPattern().IsMatch("sha256:" + release.Sha256)
             || release.Size <= 0 || release.Size > MaximumInstallerSize)
             throw new InvalidDataException("安装包信息无效。");

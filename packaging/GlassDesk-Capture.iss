@@ -38,7 +38,7 @@ CloseApplications=yes
 RestartApplications=no
 MinVersion=10.0.22000
 UninstallDisplayName=LG Dsk
-UninstallDisplayIcon={app}\GlassDesk.exe
+UninstallDisplayIcon={app}\LGDsk.exe
 SetupIconFile=..\src\GlassDesk.App\Assets\GlassDesk.ico
 AppPublisher=LG Dsk
 VersionInfoProductName=LG Dsk
@@ -59,18 +59,18 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 
 [Files]
 Source: "{#StageDirectory}\*"; DestDir: "{app}"; Excludes: "Data\*"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#StageDirectory}\GlassDesk.ico"; DestDir: "{app}"; DestName: "GlassDesk-{#ProductVersion}.ico"; Flags: ignoreversion
+Source: "{#StageDirectory}\LGDsk.ico"; DestDir: "{app}"; DestName: "LGDsk-{#ProductVersion}.ico"; Flags: ignoreversion
 Source: "Migrate-ExistingInstall.ps1"; Flags: dontcopy
 
 [Icons]
-Name: "{autoprograms}\LG Dsk"; Filename: "{app}\GlassDesk.exe"; WorkingDir: "{app}"; IconFilename: "{app}\GlassDesk-{#ProductVersion}.ico"
-Name: "{autodesktop}\LG Dsk"; Filename: "{app}\GlassDesk.exe"; WorkingDir: "{app}"; IconFilename: "{app}\GlassDesk-{#ProductVersion}.ico"; Tasks: desktopicon
+Name: "{autoprograms}\LG Dsk"; Filename: "{app}\LGDsk.exe"; WorkingDir: "{app}"; IconFilename: "{app}\LGDsk-{#ProductVersion}.ico"
+Name: "{autodesktop}\LG Dsk"; Filename: "{app}\LGDsk.exe"; WorkingDir: "{app}"; IconFilename: "{app}\LGDsk-{#ProductVersion}.ico"; Tasks: desktopicon
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\{#AppIdValue}_is1"; ValueName: "InstallLocation"; ValueType: string; ValueData: "{app}"; Flags: uninsdeletevalue
 
 [Run]
-Filename: "{app}\GlassDesk.exe"; Parameters: "--autostart"; WorkingDir: "{app}"; Flags: nowait runasoriginaluser; Check: IsGlassDeskUpdate
+Filename: "{app}\LGDsk.exe"; Parameters: "--autostart"; WorkingDir: "{app}"; Flags: nowait runasoriginaluser; Check: IsGlassDeskUpdate
 
 [Code]
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -94,4 +94,36 @@ end;
 function IsGlassDeskUpdate: Boolean;
 begin
   Result := ExpandConstant('{param:GLASSDESKUPDATE|0}') = '1';
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  OldCommand: String;
+  OldExecutable: String;
+  NewExecutable: String;
+  FindRec: TFindRec;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    OldExecutable := ExpandConstant('{app}\GlassDesk.exe');
+    NewExecutable := ExpandConstant('{app}\LGDsk.exe');
+    if RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'GlassDesk.Independent', OldCommand) then
+    begin
+      if CompareText(OldCommand, '"' + OldExecutable + '" --autostart') = 0 then
+        RegWriteStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'GlassDesk.Independent', '"' + NewExecutable + '" --autostart');
+    end;
+    if FileExists(OldExecutable) and not DeleteFile(OldExecutable) then
+      RaiseException('LG Dsk 已安装，但旧版主程序 GlassDesk.exe 仍无法移除。请关闭旧进程后重新运行安装程序。');
+    if FindFirst(ExpandConstant('{app}\GlassDesk-*.ico'), FindRec) then
+    begin
+      try
+        repeat
+          if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) = 0 then
+            DeleteFile(ExpandConstant('{app}\' + FindRec.Name));
+        until not FindNext(FindRec);
+      finally
+        FindClose(FindRec);
+      end;
+    end;
+  end;
 end;

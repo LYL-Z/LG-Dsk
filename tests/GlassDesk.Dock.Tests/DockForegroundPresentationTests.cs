@@ -20,6 +20,18 @@ public sealed class DockForegroundPresentationTests
     public void FullscreenApplicationAlwaysHidesDock()
         => AssertState(covered: true, fullscreen: true, DockPresentationMode.Hidden, AutoHideState.Hidden);
 
+    [Fact]
+    public void SettingsWindowHidesDockEvenWhenNoExternalApplicationIsForeground()
+    {
+        var covered = DockPresentationPolicy.EffectiveExternalForeground(externalApplicationForeground: false,
+            settingsWindowVisible: true);
+        Assert.Equal(DockPresentationMode.Hidden,
+            DockPresentationPolicy.Resolve(launcherActive: true, externalApplicationForeground: false,
+                foregroundIsFullscreen: false, hasSwitchableApplications: true, switcherRequested: false,
+                settingsWindowVisible: true));
+        AssertState(covered, fullscreen: false, DockPresentationMode.Hidden, AutoHideState.Hidden);
+    }
+
     private static void AssertState(bool covered, bool fullscreen, DockPresentationMode mode, AutoHideState expected)
     {
         StaTest.Run(() =>

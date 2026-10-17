@@ -337,9 +337,9 @@ public sealed class CommandLineOptions
 
     public static string HelpText =>
         """
-        GlassDesk（工作名称）
+        LG Dsk
 
-        用法：GlassDesk.exe [选项]
+        用法：LGDsk.exe [选项]
 
           --selftest         运行环境自检并退出（不显示界面）
           --selftest --acceptance-data-root <新目录> --acceptance-report <新报告文件>

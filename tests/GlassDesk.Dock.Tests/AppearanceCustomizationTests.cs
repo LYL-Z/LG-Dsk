@@ -18,6 +18,33 @@ namespace GlassDesk.Dock.Tests;
 public sealed class AppearanceCustomizationTests
 {
     [Fact]
+    public void SettingsUseAnOpaqueWarmClaudeInspiredPaletteWithoutChangingTheDockTheme()
+    {
+        StaTest.Run(() =>
+        {
+            using var theme = ThemeService.Initialize(Dispatcher.CurrentDispatcher);
+            var window = new SettingsWindow();
+            window.Resources.MergedDictionaries.Add(new ResourceDictionary
+            {
+                Source = new Uri("pack://application:,,,/GlassDesk.UI;component/Theming/LiquidGlassTheme.xaml")
+            });
+            try
+            {
+                window.Show(); window.UpdateLayout();
+                Assert.Equal("LG Dsk 设置", window.Title);
+                Assert.False(window.Palette!.IsDark);
+                Assert.Equal(Color.FromRgb(0xC9, 0x6F, 0x52), window.Palette.Accent);
+                var panel = Assert.IsType<SolidColorBrush>(window.PanelBackgroundBrush);
+                Assert.Equal(Color.FromRgb(0xF7, 0xF2, 0xE9), panel.Color);
+                var button = Assert.IsType<Button>(window.FindName("CheckUpdateButton"));
+                var fill = Assert.IsType<LinearGradientBrush>(button.Background);
+                Assert.Equal(Color.FromRgb(0xFF, 0xFB, 0xF5), fill.GradientStops[0].Color);
+            }
+            finally { window.Close(); }
+        });
+    }
+
+    [Fact]
     public void OpenPlacementMenuHasAnOpaqueBodyAndMatchesTheSelectionWidth()
     {
         StaTest.Run(() =>

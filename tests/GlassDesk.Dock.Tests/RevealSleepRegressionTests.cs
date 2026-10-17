@@ -149,8 +149,13 @@ public sealed class RevealSleepRegressionTests
                 var before = DisplayService.GetWindowPixelBounds(handle)!.Value;
                 window.Hide(); window.SetPerformanceSleeping(true);
                 var sleeping = DisplayService.GetWindowPixelBounds(handle)!.Value;
-                Assert.InRange(sleeping.Width, 1, 2);
-                Assert.InRange(sleeping.Height, 1, 2);
+                // Width/Height are one DIP. At high DPI WPF converts that to multiple
+                // physical pixels, and the native resize frame can add one more pixel.
+                // Bound the actual layered surface in display-relative pixels rather
+                // than assuming every monitor runs at 96 DPI.
+                var maxPhysicalExtent = DisplayService.Primary()!.ToPixels(1) + 1;
+                Assert.InRange(sleeping.Width, 1, maxPhysicalExtent);
+                Assert.InRange(sleeping.Height, 1, maxPhysicalExtent);
                 window.SetPerformanceSleeping(false);
                 window.ShowWithTransition(null);
                 Assert.Equal(before, DisplayService.GetWindowPixelBounds(handle)!.Value);

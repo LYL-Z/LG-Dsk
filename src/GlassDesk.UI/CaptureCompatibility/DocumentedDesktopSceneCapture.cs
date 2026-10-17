@@ -153,6 +153,7 @@ internal sealed class DocumentedDesktopSceneCapture : IDesktopSceneCapture
         {
             GetWindowThreadProcessId(hwnd, out var pid);
             if (hwnd == shell || pid == 0 || pid == Environment.ProcessId || excluded.Contains((int)pid)
+                || GlassBackdropScene.IsTransientOverlay(hwnd)
                 || !IsWindowVisible(hwnd) || IsIconic(hwnd)) return true;
             if (DwmGetWindowAttribute(hwnd, 14, out int cloaked, sizeof(int)) >= 0 && cloaked != 0) return true;
             if (DwmGetWindowAttribute(hwnd, 9, out Rect bounds, Marshal.SizeOf<Rect>()) < 0 && !GetWindowRect(hwnd, out bounds)) return true;

@@ -11,6 +11,15 @@ public sealed class GlassRevealTests
     private const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
 
     [Theory]
+    [InlineData(0x800A0L, true)]
+    [InlineData(0x80020L, false)]
+    [InlineData(0x000A0L, false)]
+    [InlineData(0x80080L, false)]
+    [InlineData(0x00000L, false)]
+    public void OnlyLayeredClickThroughToolWindowsAreTransientOverlays(long style, bool expected) =>
+        Assert.Equal(expected, GlassBackdropScene.IsTransientOverlayStyle(style));
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void VisibleWindowCloseOrMovementKeepsMaterialUntilBoundedFreshFrameHandoff(bool move)

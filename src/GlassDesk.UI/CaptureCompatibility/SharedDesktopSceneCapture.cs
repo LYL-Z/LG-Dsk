@@ -240,6 +240,7 @@ internal sealed unsafe class SharedDesktopSceneCapture : IDesktopSceneCapture
         {
             GetWindowThreadProcessId(hwnd,out var pid);
             if(pid==Environment.ProcessId || pid==_excludedParentProcess || family.Contains((int)pid)) exclusions.Add(hwnd);
+            else if(GlassDesk.UI.Controls.GlassBackdropScene.IsTransientOverlay(hwnd)) exclusions.Add(hwnd);
             else if(pid!=0 && IsWindowVisible(hwnd) && !IsIconic(hwnd)
                 && !(DwmGetWindowAttribute(hwnd,14,out int cloaked,sizeof(int))>=0 && cloaked!=0)
                 && GetWindowRect(hwnd,out var rect)

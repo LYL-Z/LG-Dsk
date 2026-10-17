@@ -14,17 +14,45 @@ internal sealed partial class AppHost
 {
     private readonly CancellationTokenSource _updateLifetime = new();
     private readonly HttpClient _updateHttp = new() { Timeout = Timeout.InfiniteTimeSpan };
+    private DispatcherTimer? _updateCheckTimer;
     private UpdateWindow? _updateWindow;
+    private UpdateRelease? _availableRelease;
+    private UpdateClient? _availableUpdateClient;
     private bool _checkingUpdate;
 
     internal static Version ProductVersion => Version.TryParse(
         typeof(AppHost).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0].Split('-')[0], out var version)
-        ? new Version(version.Major, version.Minor, Math.Max(0, version.Build)) : new Version(0, 2, 9);
+        ? new Version(version.Major, version.Minor, Math.Max(0, version.Build)) : new Version(1, 4, 2);
 
     private void InitializeUpdates()
     {
-        _settings!.ShowUpdateStatus(ProductVersion.ToString(), "LG Dsk 本地定制版未配置在线更新源，请从本地仓库构建更新。");
+        _settings!.CheckForUpdatesRequested += OnCheckForUpdatesRequested;
+        _settings.AutomaticUpdateCheckChanged += OnAutomaticUpdateCheckChanged;
+        var enabled = _data!.Settings.Current.Updates.CheckAutomatically;
+        _settings.ShowUpdateStatus(ProductVersion.ToString(), enabled
+            ? "已启用自动检查；正在连接 LG Dsk 公开正式版发布源。下载与安装前仍会征求确认。"
+            : "自动检查已关闭；可随时手动检查 LG Dsk 正式版本。");
+        ConfigureAutomaticUpdateChecks(enabled, checkImmediately: true);
     }
+
+    private void OnCheckForUpdatesRequested(object? sender, EventArgs e) => _ = CheckUpdatesAsync(manual: true);
+
+    private void OnAutomaticUpdateCheckChanged(bool enabled) => ConfigureAutomaticUpdateChecks(enabled, checkImmediately: enabled);
+
+    private void ConfigureAutomaticUpdateChecks(bool enabled, bool checkImmediately)
+    {
+        _updateCheckTimer ??= new DispatcherTimer { Interval = TimeSpan.FromHours(24) };
+        _updateCheckTimer.Stop();
+        _updateCheckTimer.Tick -= OnAutomaticUpdateTimerTick;
+        if (!enabled || _shuttingDown) return;
+        _updateCheckTimer.Tick += OnAutomaticUpdateTimerTick;
+        _updateCheckTimer.Start();
+        if (checkImmediately)
+            _application.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle,
+                new Action(() => _ = CheckUpdatesAsync(manual: false)));
+    }
+
+    private void OnAutomaticUpdateTimerTick(object? sender, EventArgs e) => _ = CheckUpdatesAsync(manual: false);
 
     private UpdateClient CreateUpdateClient()
     {
@@ -44,6 +72,11 @@ internal sealed partial class AppHost
     {
         if (_shuttingDown || _checkingUpdate) return;
         if (_updateWindow is not null) { if (manual) _updateWindow.Activate(); return; }
+        if (manual && _availableRelease is not null && _availableUpdateClient is not null)
+        {
+            ShowUpdatePrompt(_availableUpdateClient, _availableRelease);
+            return;
+        }
         _checkingUpdate = true;
         _settings?.ShowUpdateStatus(ProductVersion.ToString(), "正在检查更新…", checking: true);
         try
@@ -53,16 +86,17 @@ internal sealed partial class AppHost
             if (_shuttingDown || _updateLifetime.IsCancellationRequested) return;
             if (release is null)
             {
-                _settings?.ShowUpdateStatus(ProductVersion.ToString(), "当前已是最新正式版本。");
+                _availableRelease = null;
+                _availableUpdateClient = null;
+                _settings?.ShowUpdateStatus(ProductVersion.ToString(), "当前已是最新正式版本。", actionText: "重新检查");
                 return;
             }
-            _settings?.ShowUpdateStatus(ProductVersion.ToString(), $"发现新版本 {release.Version}。");
-            var installation = new InstallationLocator().Inspect(Environment.ProcessPath ?? string.Empty);
-            _updateWindow = new UpdateWindow(release, installation.State == InstallationState.VerifiedInstalled,
-                (progress, token) => InstallUpdateAsync(client, release, progress, token));
-            _updateWindow.Icon = _settings?.Icon;
-            _updateWindow.Closed += (_, _) => _updateWindow = null;
-            _updateWindow.Show();
+            _availableRelease = release;
+            _availableUpdateClient = client;
+            _settings?.ShowUpdateStatus(ProductVersion.ToString(),
+                $"发现新版本 {release.Version}。点击下方按钮查看更新说明并选择是否下载安装。",
+                actionText: $"下载并安装 {release.Version}");
+            if (manual) ShowUpdatePrompt(client, release);
         }
         catch (OperationCanceledException)
         {
@@ -75,10 +109,29 @@ internal sealed partial class AppHost
         finally { _checkingUpdate = false; }
     }
 
+    private void ShowUpdatePrompt(UpdateClient client, UpdateRelease release)
+    {
+        if (_updateWindow is not null) { _updateWindow.Activate(); return; }
+        var installation = new InstallationLocator().Inspect(Environment.ProcessPath ?? string.Empty);
+        _updateWindow = new UpdateWindow(release, installation.State == InstallationState.VerifiedInstalled,
+            (progress, token) => InstallUpdateAsync(client, release, progress, token));
+        _updateWindow.Icon = _settings?.Icon;
+        _updateWindow.Closed += (_, _) =>
+        {
+            _updateWindow = null;
+            if (_availableRelease is not null)
+                _settings?.ShowUpdateStatus(ProductVersion.ToString(),
+                    $"新版本 {_availableRelease.Version} 已就绪；可稍后继续。",
+                    actionText: $"下载并安装 {_availableRelease.Version}");
+        };
+        _updateWindow.Show();
+        _updateWindow.Activate();
+    }
+
     private async Task InstallUpdateAsync(UpdateClient client, UpdateRelease release, IProgress<int> progress, CancellationToken token)
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, _updateLifetime.Token);
-        var cache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GlassDesk", "Updates");
+        var cache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LG Dsk", "Updates");
         var file = await client.DownloadAsync(release, cache, progress, cancellation.Token);
         var launched = false;
         try
@@ -103,6 +156,17 @@ internal sealed partial class AppHost
 
     private void DisposeUpdates()
     {
+        if (_settings is not null)
+        {
+            _settings.CheckForUpdatesRequested -= OnCheckForUpdatesRequested;
+            _settings.AutomaticUpdateCheckChanged -= OnAutomaticUpdateCheckChanged;
+        }
+        if (_updateCheckTimer is not null)
+        {
+            _updateCheckTimer.Stop();
+            _updateCheckTimer.Tick -= OnAutomaticUpdateTimerTick;
+            _updateCheckTimer = null;
+        }
         _updateLifetime.Cancel();
         _updateWindow?.Close();
         _updateHttp.Dispose();

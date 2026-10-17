@@ -100,7 +100,7 @@ public sealed class StartupRegistration
             return new(true, before, null);
         if (before.State == StartupRegistrationState.OtherTarget)
         {
-            var conflict = "同名登录启动项指向其它文件；为保护该项，GlassDesk 没有修改它。";
+            var conflict = "同名登录启动项指向其它文件；为保护该项，LG Dsk 没有修改它。";
             return new(false, before with { Error = conflict }, conflict);
         }
 
@@ -118,7 +118,7 @@ public sealed class StartupRegistration
                 return new(true, current, null);
             if (current.State == StartupRegistrationState.OtherTarget)
             {
-                var conflict = "登录启动项已被其它位置修改；为保护该项，GlassDesk 没有覆盖或删除它。";
+                var conflict = "登录启动项已被其它位置修改；为保护该项，LG Dsk 没有覆盖或删除它。";
                 return new(false, current with { Error = conflict }, conflict);
             }
             if (current.State == StartupRegistrationState.Unavailable)
@@ -187,7 +187,7 @@ public sealed class StartupRegistration
             return new(StartupRegistrationState.Missing, fullPath, null);
 
         if (key.GetValueKind(_valueName) != RegistryValueKind.String)
-            return new(StartupRegistrationState.OtherTarget, null, "同名登录启动项不是普通字符串值，GlassDesk 不会更改它。");
+            return new(StartupRegistrationState.OtherTarget, null, "同名登录启动项不是普通字符串值，LG Dsk 不会更改它。");
 
         var stored = key.GetValue(_valueName, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
         return string.Equals(stored, expectedCommand, StringComparison.OrdinalIgnoreCase)
@@ -230,7 +230,7 @@ public sealed class StartupRegistration
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
             if (!Path.IsPathFullyQualified(executablePath))
-                throw new ArgumentException("必须提供 GlassDesk.exe 的完整路径。", nameof(executablePath));
+                throw new ArgumentException("必须提供 LGDsk.exe 的完整路径。", nameof(executablePath));
 
             fullPath = Path.GetFullPath(executablePath);
             if (fullPath.Contains('"'))
@@ -242,7 +242,7 @@ public sealed class StartupRegistration
             if (command.Length > MaximumCommandLineLength)
                 throw new ArgumentException($"登录启动命令不能超过 {MaximumCommandLineLength} 个字符。", nameof(executablePath));
             if (!File.Exists(fullPath))
-                throw new FileNotFoundException("找不到 GlassDesk 可执行文件。", fullPath);
+                throw new FileNotFoundException("找不到 LG Dsk 可执行文件。", fullPath);
 
             return true;
         }

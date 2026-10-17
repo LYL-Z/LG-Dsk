@@ -10,11 +10,13 @@ internal sealed partial class AppHost
     private PerformanceCoordinator? _performance;
     private PerformanceFullscreenMonitor? _performanceFullscreen;
     private DispatcherTimer? _performanceDeadlineTimer;
+    private DispatcherTimer? _fullscreenAppIslandTaskbarTimer;
     private DateTimeOffset? _launcherHiddenSince;
     private bool _applyingPerformance, _performanceApplyPending, _launcherPerformanceSleeping;
     private bool _libraryDirtyWhileSleeping;
     private bool _launcherLibraryDirty;
     private bool _performanceActivationPending;
+    private bool _performanceExternalFullscreenObserved;
     private volatile bool _performancePointerInputSuppressed;
     private long _foregroundObservationSequence;
 
@@ -31,6 +33,9 @@ internal sealed partial class AppHost
         TrackerPaused = _services?.Running.IsSuspended == true,
         ReconcileCount = _services?.Running.ReconcileCount ?? 0,
         FullscreenFallback = RuntimeFullscreenFallback,
+        FullscreenAppIslandConfigured = _data?.Settings.Current.Performance.ShowFullscreenAppIsland == true,
+        FullscreenAppIslandContext = _performanceExternalFullscreenObserved,
+        FullscreenAppIslandVisible = _dock?.IsAppAwarenessSurfaceRequested == true,
         DockSleeping = _dock?.IsPerformanceSleeping == true,
         LauncherSleeping = _launcherPerformanceSleeping,
     };
@@ -46,6 +51,7 @@ internal sealed partial class AppHost
         _performanceDeadlineTimer = new DispatcherTimer(DispatcherPriority.Input, _application.Dispatcher);
         _performanceDeadlineTimer.Tick += (_, _) => { _performanceDeadlineTimer.Stop(); ReconcilePerformance(); };
         _dock!.PerformanceSurfaceVisibilityChanged += OnPerformanceVisibilityChanged;
+        _dock.RunningAppSwitcherVisibilityChanged += OnRunningAppSwitcherVisibilityChanged;
         _dock.IsVisibleChanged += OnPerformanceWindowVisibilityChanged;
         _launcher!.IsVisibleChanged += OnPerformanceWindowVisibilityChanged;
         _settings!.PerformanceSettingsChanged += OnPerformanceSettingsChanged;
@@ -61,12 +67,17 @@ internal sealed partial class AppHost
         {
             if (_disposed || _shuttingDown || _performance is null || sequence != Volatile.Read(ref _foregroundObservationSequence)) return;
             if (observation.IsFullscreen is { } fullscreen)
+            {
+                if (!observation.BelongsToCurrentProcess)
+                    _performanceExternalFullscreenObserved = fullscreen;
                 _performance.ObserveForeground(fullscreen, observation.BelongsToCurrentProcess, DateTimeOffset.UtcNow);
+            }
             ReconcilePerformance();
         }));
     }
 
     private void OnPerformanceVisibilityChanged(object? sender, EventArgs e) => ReconcilePerformance();
+    private void OnRunningAppSwitcherVisibilityChanged(object? sender, EventArgs e) => ReconcilePerformance();
     private void OnPerformanceWindowVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (ReferenceEquals(sender, _launcher))
@@ -117,6 +128,10 @@ internal sealed partial class AppHost
             {
                 _performanceApplyPending = false;
                 var now = DateTimeOffset.UtcNow;
+                UpdateFullscreenAppIslandPolicy();
+                var appAwarenessRequested = !_performance.IsSessionSuspended
+                    && _dock?.IsAppAwarenessSurfaceRequested == true;
+                _performance.SetAppAwarenessSurfaceRequested(appAwarenessRequested, now);
                 _performance.SetVisibleSurfaces(_dock?.IsPerformanceCaptureRequested == true,
                     _launcher?.IsVisible == true || _performanceActivationPending, now);
                 var state = _performance.State;
@@ -124,7 +139,7 @@ internal sealed partial class AppHost
                 var suppressed = _performance.IsSuppressionRequested;
                 var temporary = _performance.IsTemporaryActivation;
 
-                _dock?.SetPerformanceSleeping(suppressed);
+                _dock?.SetPerformanceSleeping(suppressed && !appAwarenessRequested);
                 _dock?.SetBackgroundCaptureSleeping(sleeping && !suppressed);
                 if (sleeping && suppressed && _launcher?.IsVisible == true && !_launcher.IsClosingContainer) HideLauncher();
 
@@ -138,7 +153,8 @@ internal sealed partial class AppHost
                     _launcher?.SetPerformanceSleeping(launcherShouldSleep);
                 }
                 _launcher?.SetBackgroundWorkSuspended(!launcherVisible && !temporary || sleeping && suppressed);
-                _services?.Running.SetSuspended(sleeping || state == PerformanceState.WarmHidden || suppressed && !launcherVisible);
+                _services?.Running.SetSuspended(sleeping || state == PerformanceState.WarmHidden
+                    || suppressed && !launcherVisible && !appAwarenessRequested);
                 if (!sleeping && _libraryDirtyWhileSleeping)
                 {
                     _libraryDirtyWhileSleeping = false;
@@ -151,6 +167,44 @@ internal sealed partial class AppHost
             } while (_performanceApplyPending);
         }
         finally { _applyingPerformance = false; }
+    }
+
+    private void UpdateFullscreenAppIslandPolicy()
+    {
+        if (_dock is null || _data is null) return;
+        var enabled = _data.Settings.Current.Performance.ShowFullscreenAppIsland;
+        _dock.SetFullscreenAppIslandEnabled(enabled);
+
+        var pollTaskbarState = enabled && _performanceExternalFullscreenObserved;
+        if (_fullscreenAppIslandTaskbarTimer is null)
+        {
+            _fullscreenAppIslandTaskbarTimer = new DispatcherTimer(DispatcherPriority.Background, _application.Dispatcher)
+            {
+                Interval = TimeSpan.FromSeconds(1),
+            };
+            _fullscreenAppIslandTaskbarTimer.Tick += (_, _) => UpdateFullscreenAppIslandContext();
+        }
+
+        if (pollTaskbarState)
+        {
+            if (!_fullscreenAppIslandTaskbarTimer.IsEnabled)
+                _fullscreenAppIslandTaskbarTimer.Start();
+        }
+        else
+        {
+            _fullscreenAppIslandTaskbarTimer.Stop();
+        }
+
+        UpdateFullscreenAppIslandContext();
+    }
+
+    private void UpdateFullscreenAppIslandContext()
+    {
+        if (_dock is null || _data is null) return;
+        var active = _data.Settings.Current.Performance.ShowFullscreenAppIsland
+            && _performanceExternalFullscreenObserved
+            && FullscreenDetector.IsTaskbarAutoHidden();
+        _dock.SetFullscreenAppIslandContext(active);
     }
 
     private void SchedulePerformanceDeadline(DateTimeOffset now)
@@ -181,11 +235,14 @@ internal sealed partial class AppHost
     {
         _performanceDeadlineTimer?.Stop();
         _performanceDeadlineTimer = null;
+        _fullscreenAppIslandTaskbarTimer?.Stop();
+        _fullscreenAppIslandTaskbarTimer = null;
         _performanceFullscreen?.Dispose();
         _performanceFullscreen = null;
         if (_dock is not null)
         {
             _dock.PerformanceSurfaceVisibilityChanged -= OnPerformanceVisibilityChanged;
+            _dock.RunningAppSwitcherVisibilityChanged -= OnRunningAppSwitcherVisibilityChanged;
             _dock.IsVisibleChanged -= OnPerformanceWindowVisibilityChanged;
         }
         if (_launcher is not null) _launcher.IsVisibleChanged -= OnPerformanceWindowVisibilityChanged;

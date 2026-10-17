@@ -8,8 +8,8 @@ public sealed class UpdateInstallerTests : IDisposable
 {
     private readonly string _root = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "GlassDesk-install-update-" + Guid.NewGuid().ToString("N"))).FullName;
     private readonly byte[] _bytes = [1, 2, 3, 4];
-    private UpdateRelease Release => new(new Version(0, 2, 10), "GlassDesk-0.2.10-win-x64-Setup.exe",
-        new Uri("https://github.com/everlosttime/glassdesk-updates/releases/download/v0.2.10/GlassDesk-0.2.10-win-x64-Setup.exe"),
+    private UpdateRelease Release => new(new Version(0, 2, 10), "LG-Dsk-0.2.10-win-x64-Setup.exe",
+        new Uri("https://github.com/LYL-Z/LG-Dsk/releases/download/v0.2.10/LG-Dsk-0.2.10-win-x64-Setup.exe"),
         Convert.ToHexString(SHA256.HashData(_bytes)), 4, "Notes", new Uri("https://github.com/everlosttime/glassdesk-updates/releases/tag/v0.2.10"));
 
     [Theory]

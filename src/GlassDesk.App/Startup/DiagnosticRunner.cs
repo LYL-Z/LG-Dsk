@@ -32,7 +32,7 @@ internal static class DiagnosticRunner
         var report = new StringBuilder();
         var failures = 0;
 
-        report.AppendLine("GlassDesk 显示与坐标空间诊断");
+        report.AppendLine("LG Dsk 显示与坐标空间诊断");
         report.AppendLine(new string('=', 52));
         report.AppendLine(CultureInfo.InvariantCulture, $"时间：{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz}");
         report.AppendLine(CultureInfo.InvariantCulture, $"操作系统：Windows {WindowsCapabilities.OsVersion}（Build {WindowsCapabilities.BuildNumber}）");

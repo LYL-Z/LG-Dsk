@@ -135,7 +135,7 @@ public sealed class BackupService
             {
                 Succeeded = false,
                 Directory = sourceDirectory,
-                Error = "所选文件夹中没有 GlassDesk 备份清单，无法确认来源。",
+                Error = "所选文件夹中没有 LG Dsk 兼容的备份清单，无法确认来源。",
             };
         }
 

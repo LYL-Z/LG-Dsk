@@ -44,7 +44,8 @@ try {
         $stage = Join-Path $root "stage-$version"
         & $dotnet publish (Join-Path $stub 'Probe.csproj') -c Release -r win-x64 --self-contained false "-p:Version=$version" "-p:FileVersion=$version.0" "-p:AssemblyVersion=$version.0" -o $stage *> (Join-Path $root "publish-$version.log")
         if ($LASTEXITCODE -ne 0) { throw 'Probe publish failed.' }
-        Copy-Item -LiteralPath (Join-Path $repo 'src/GlassDesk.App/Assets/GlassDesk.ico') -Destination (Join-Path $stage 'GlassDesk.ico')
+        Move-Item -LiteralPath (Join-Path $stage 'GlassDesk.exe') -Destination (Join-Path $stage 'LGDsk.exe')
+        Copy-Item -LiteralPath (Join-Path $repo 'src/GlassDesk.App/Assets/GlassDesk.ico') -Destination (Join-Path $stage 'LGDsk.ico')
         $null = New-Item -ItemType Directory -Path (Join-Path $stage 'Data')
         'Must not overwrite user data' | Set-Content -LiteralPath (Join-Path $stage 'Data/settings.json')
         $env:GLASSDESK_PACKAGE_STAGE = $stage
@@ -61,6 +62,8 @@ try {
     if ($process.ExitCode -ne 0) { throw "Old installer failed: $($process.ExitCode)" }
     $process.Dispose()
     if (@(Get-ChildItem -LiteralPath (Join-Path $installed 'Data') -File -Recurse -ErrorAction SilentlyContinue).Count -ne 0) { throw 'Installer unexpectedly shipped user Data.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $installed 'LGDsk.exe'))) { throw 'Branded LGDsk.exe was not installed.' }
+    if (Test-Path -LiteralPath (Join-Path $installed 'GlassDesk.exe')) { throw 'Legacy GlassDesk.exe remained after installation.' }
     if (Test-Path -LiteralPath (Join-Path $installed 'restart-marker.json')) { throw 'Normal installation unexpectedly invoked update restart.' }
     $checks += 'Initial isolated install succeeds, excludes Data, and does not invoke update restart'
     $data = Join-Path $installed 'Data'
@@ -84,9 +87,9 @@ try {
     $shortcutPath = Join-Path ([Environment]::GetFolderPath('Programs')) ($identity + '.lnk')
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
-    $expectedIcon = Join-Path $installed 'GlassDesk-0.2.9.ico'
+    $expectedIcon = Join-Path $installed 'LGDsk-0.2.9.ico'
     if ($shortcut.IconLocation -ne ($expectedIcon + ',0')) { throw "Shortcut still uses a cached/default icon: $($shortcut.IconLocation)" }
-    if ($shortcut.TargetPath -ne (Join-Path $installed 'GlassDesk.exe')) { throw 'Shortcut target changed.' }
+    if ($shortcut.TargetPath -ne (Join-Path $installed 'LGDsk.exe')) { throw 'Shortcut target changed.' }
     if ((Get-FileHash -LiteralPath $expectedIcon).Hash -ne (Get-FileHash -LiteralPath (Join-Path $repo 'src/GlassDesk.App/Assets/GlassDesk.ico')).Hash) { throw 'Installed shortcut icon differs from approved artwork.' }
     $checks += 'Upgraded shortcut references the versioned approved icon and keeps the executable target'
     $deadline = [DateTime]::UtcNow.AddSeconds(10)

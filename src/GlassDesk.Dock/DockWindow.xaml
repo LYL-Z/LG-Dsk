@@ -114,44 +114,90 @@
 
         <Border x:Name="SwitcherContentLayer" Margin="10,8" Visibility="Collapsed"
                 Background="Transparent" IsHitTestVisible="True" Panel.ZIndex="1">
-          <ScrollViewer x:Name="RunningAppsScrollViewer"
-                        Width="{Binding ActualWidth, ElementName=DockContentLayer}"
-                        HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
-                        PreviewMouseWheel="OnSwitcherMouseWheel">
-            <ItemsControl x:Name="RunningAppsItems" HorizontalAlignment="Center" VerticalAlignment="Center">
-              <ItemsControl.ItemsPanel>
-                <ItemsPanelTemplate>
-                  <StackPanel Orientation="Horizontal" />
-                </ItemsPanelTemplate>
-              </ItemsControl.ItemsPanel>
-              <ItemsControl.ItemTemplate>
-                <DataTemplate>
-                  <Button Width="58" Height="62" Margin="2,0" Padding="2"
-                          Background="Transparent" BorderThickness="0" Focusable="False"
-                          ToolTip="{Binding ToolTipText}"
-                          AutomationProperties.Name="{Binding ToolTipText}"
-                          Click="OnSwitcherItemClick">
-                    <Border CornerRadius="12" Background="Transparent" Padding="2">
-                      <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                        <Grid Width="36" Height="36" HorizontalAlignment="Center">
-                          <Border CornerRadius="9" Background="#553A6A9B">
-                            <TextBlock Text="{Binding Glyph}" FontSize="18" FontWeight="SemiBold"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                                       Foreground="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
-                          </Border>
-                          <Image Source="{Binding Icon}" Width="36" Height="36" Stretch="Uniform"
-                                 RenderOptions.BitmapScalingMode="HighQuality" />
-                        </Grid>
-                        <TextBlock Text="{Binding DisplayName}" MaxWidth="54" Margin="0,3,0,0"
-                                   FontSize="9" TextAlignment="Center" TextTrimming="CharacterEllipsis"
-                                   Foreground="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
-                      </StackPanel>
-                    </Border>
-                  </Button>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-          </ScrollViewer>
+          <StackPanel>
+            <DockPanel Margin="8,0,8,5" LastChildFill="True">
+              <Button x:Name="CloseSwitcherButton" DockPanel.Dock="Right" Width="26" Height="24"
+                      Padding="0" Content="×" FontSize="17" Background="Transparent" BorderThickness="0"
+                      ToolTip="收起应用条" AutomationProperties.Name="收起运行应用条"
+                      Click="OnCloseSwitcherClick" />
+              <TextBlock x:Name="SwitcherSummaryText" VerticalAlignment="Center" FontSize="11"
+                         Text="窗口 0 · 后台 0"
+                         Foreground="{Binding SecondaryForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+            </DockPanel>
+            <TextBlock Margin="8,0,8,5" Text="点击窗口即可切换；后台项表示进程仍在运行，但当前没有可切换窗口。"
+                       FontSize="9"
+                       Foreground="{Binding SecondaryForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+            <TextBlock x:Name="NoRunningAppsText" Margin="12,6" HorizontalAlignment="Center"
+                       Text="暂未检测到应用；仍可使用 Windows 的 Alt+Tab。"
+                       FontSize="11" Visibility="Collapsed"
+                       Foreground="{Binding SecondaryForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+            <ScrollViewer x:Name="RunningAppsScrollViewer" HorizontalAlignment="Stretch"
+                          HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
+                          PreviewMouseWheel="OnSwitcherMouseWheel">
+              <ItemsControl x:Name="RunningAppsItems" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <StackPanel Orientation="Horizontal" />
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Button Width="62" Height="74" Margin="2,0" Padding="2"
+                            IsEnabled="{Binding IsWindowSwitchable}"
+                            Background="Transparent" BorderThickness="0" Focusable="False"
+                            ToolTip="{Binding ToolTipText}"
+                            AutomationProperties.Name="{Binding ToolTipText}"
+                            Click="OnSwitcherItemClick">
+                      <Border CornerRadius="12" Background="Transparent" Padding="2">
+                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                          <Grid Width="38" Height="38" HorizontalAlignment="Center">
+                            <Border CornerRadius="9" Background="#553A6A9B">
+                              <TextBlock Text="{Binding Glyph}" FontSize="18" FontWeight="SemiBold"
+                                         HorizontalAlignment="Center" VerticalAlignment="Center"
+                                         Foreground="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+                            </Border>
+                            <Image Source="{Binding Icon}" Width="38" Height="38" Stretch="Uniform"
+                                   RenderOptions.BitmapScalingMode="HighQuality" />
+                          </Grid>
+                          <TextBlock Text="{Binding DisplayName}" MaxWidth="58" Margin="0,2,0,0"
+                                     FontSize="9" TextAlignment="Center" TextTrimming="CharacterEllipsis"
+                                     Foreground="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+                          <TextBlock Text="{Binding StatusLabel}" FontSize="7" TextAlignment="Center"
+                                     Foreground="{Binding SecondaryForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+                        </StackPanel>
+                      </Border>
+                    </Button>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </StackPanel>
+        </Border>
+
+        <Border x:Name="AppIslandContentLayer" Margin="10,8" Visibility="Collapsed"
+                Background="Transparent" IsHitTestVisible="True" Panel.ZIndex="2">
+          <Button x:Name="AppIslandButton" MinWidth="164" Height="42" Padding="12,5"
+                  Background="Transparent" BorderThickness="0" Focusable="False"
+                  ToolTip="点击查看窗口与后台应用；鼠标经过不会展开"
+                  AutomationProperties.Name="展开 LG Dsk 应用岛"
+                  Click="OnAppIslandClick">
+            <Border CornerRadius="18" Background="#33201B18" Padding="6,3">
+              <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center">
+                <Border Width="28" Height="28" CornerRadius="14" Background="#FFE2D4C4" Margin="0,0,8,0">
+                  <TextBlock Text="LG" FontSize="10" FontWeight="Bold" HorizontalAlignment="Center"
+                             VerticalAlignment="Center" Foreground="#FFB65B43" />
+                </Border>
+                <StackPanel VerticalAlignment="Center">
+                  <TextBlock Text="LG Dsk" FontSize="10" FontWeight="SemiBold"
+                             Foreground="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+                  <TextBlock x:Name="AppIslandCountsText" Text="窗口 0 · 后台 0" FontSize="8"
+                             Foreground="{Binding SecondaryForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+                </StackPanel>
+                <TextBlock Text="✳" Margin="8,0,0,0" FontSize="15" Foreground="#FFC86B4F"
+                           VerticalAlignment="Center" />
+              </StackPanel>
+            </Border>
+          </Button>
         </Border>
       </Grid>
     </Grid>

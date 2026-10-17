@@ -85,6 +85,21 @@ public sealed class PerformanceCoordinatorTests
         Assert.Equal("Waking", runtime.State);
     }
 
+    [Fact]
+    public void FullscreenAppIslandKeepsTheSwitchingSurfaceAwakeButSessionSuspensionWins()
+    {
+        var runtime = new Runtime();
+        runtime.Call("ObserveForeground", true, false, Start);
+        runtime.Call("Advance", Start.AddMilliseconds(500));
+        Assert.Equal("Sleeping", runtime.State);
+
+        runtime.Call("SetAppAwarenessSurfaceRequested", true, Start.AddMilliseconds(600));
+        Assert.Equal("TemporaryActive", runtime.State);
+
+        runtime.Call("SetSessionSuspended", true, Start.AddSeconds(1));
+        Assert.Equal("Sleeping", runtime.State);
+    }
+
     private sealed class Runtime
     {
         private readonly object _instance;

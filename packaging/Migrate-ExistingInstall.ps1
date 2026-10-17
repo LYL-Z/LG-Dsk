@@ -162,6 +162,43 @@ function Get-UninstallerPath {
     return $candidate
 }
 
+function Get-ProductExecutable {
+    param([string]$Directory)
+    foreach ($name in @('LGDsk.exe', 'GlassDesk.exe')) {
+        $candidate = Join-Path $Directory $name
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    }
+    return $null
+}
+
+function Get-ExistingProductExecutables {
+    param([string]$Directory)
+    $paths = foreach ($name in @('LGDsk.exe', 'GlassDesk.exe')) {
+        $candidate = Join-Path $Directory $name
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $candidate }
+    }
+    return @($paths)
+}
+
+function Update-ProductStartupPath {
+    param([string]$NewExecutable, [string]$PreviousExecutable)
+    if (-not (Test-Path -LiteralPath $runKeyPath)) { return }
+    $runKey = Get-ItemProperty -LiteralPath $runKeyPath
+    $runProperty = $runKey.PSObject.Properties[$runValueName]
+    $current = if ($null -ne $runProperty) { [string]$runProperty.Value } else { '' }
+    $directory = Split-Path -Parent $PreviousExecutable
+    $candidates = @($PreviousExecutable, (Join-Path $directory 'LGDsk.exe'), (Join-Path $directory 'GlassDesk.exe')) |
+        Where-Object { $_ } | Select-Object -Unique
+    foreach ($candidate in $candidates) {
+        $expected = '"' + $candidate + '" --autostart'
+        if ([string]::Equals($current.Trim(), $expected, [StringComparison]::OrdinalIgnoreCase)) {
+            Set-ItemProperty -LiteralPath $runKeyPath -Name $runValueName -Value ('"' + $NewExecutable + '" --autostart')
+            Write-MigrationLog 'Updated the existing product-owned login startup path.'
+            return
+        }
+    }
+}
+
 try {
     $newDirectory = Get-NormalizedPath $NewInstallDirectory
     Assert-InstallDirectory $newDirectory
@@ -195,8 +232,8 @@ try {
                 throw ('迁移来源与目标路径彼此嵌套；暂存文件已保留：' + $script:stageRoot)
             }
             $recoveryOldExecutable = Join-Path $recoverySource 'GlassDesk.exe'
-            $recoveryNewExecutable = Join-Path $newDirectory 'GlassDesk.exe'
-            if (Test-Path -LiteralPath $recoveryOldExecutable) {
+            $recoveryNewExecutable = Join-Path $newDirectory 'LGDsk.exe'
+            if ((Get-ExistingProductExecutables $recoverySource).Count -gt 0) {
                 throw ('旧程序文件仍存在。为保护迁移数据，安装已停止；暂存文件已保留：' + $script:stageRoot)
             }
             $recoveryHadData = if (Test-Path -LiteralPath $dataPresencePath) { (Get-Content -LiteralPath $dataPresencePath -Raw).Trim() } else { '' }
@@ -225,15 +262,7 @@ try {
                 }
                 Set-Content -LiteralPath $stageStatePath -Value 'data-restored' -Encoding UTF8
             }
-            if (Test-Path -LiteralPath $runKeyPath) {
-                $recoveryRunKey = Get-ItemProperty -LiteralPath $runKeyPath
-                $recoveryProperty = $recoveryRunKey.PSObject.Properties[$runValueName]
-                $recoveryCommand = if ($null -ne $recoveryProperty) { [string]$recoveryProperty.Value } else { '' }
-                $recoveryPattern = '^\s*"' + [Regex]::Escape($recoveryOldExecutable) + '"\s+--autostart\s*$'
-                if ($recoveryCommand -match $recoveryPattern) {
-                    Set-ItemProperty -LiteralPath $runKeyPath -Name $runValueName -Value ('"' + $recoveryNewExecutable + '" --autostart')
-                }
-            }
+            if ($recoveryOldExecutable) { Update-ProductStartupPath $recoveryNewExecutable $recoveryOldExecutable }
             Assert-NoReparsePointsInTree $script:stageRoot
             Remove-Item -LiteralPath $script:stageRoot -Recurse -Force
             Write-MigrationLog 'Recovered staged user data and startup registration after a previous installer interruption.'
@@ -253,6 +282,21 @@ try {
 
     $oldDirectory = Get-NormalizedPath ([string]$registration.InstallLocation)
     Assert-InstallDirectory $oldDirectory
+    $newExecutable = Join-Path $newDirectory 'LGDsk.exe'
+    $oldExecutable = Get-ProductExecutable $oldDirectory
+    if (-not $oldExecutable) {
+        throw '已登记的 LG Dsk 安装目录中找不到主程序。'
+    }
+    $runningProcesses = @(Get-Process -Name 'GlassDesk', 'LGDsk' -ErrorAction SilentlyContinue)
+    foreach ($process in $runningProcesses) {
+        try {
+            if (Test-SamePath $process.MainModule.FileName $oldExecutable) {
+                throw '请先从系统托盘完全退出 LG Dsk，再重新运行安装程序。'
+            }
+        } catch [System.Management.Automation.MethodInvocationException] {
+            throw '无法确认 LG Dsk 是否仍在运行。请先从系统托盘退出所有 LG Dsk 窗口后重试。'
+        }
+    }
     if (Test-SamePath $oldDirectory $newDirectory) {
         Write-MigrationLog 'Existing install already uses the selected directory; in-place upgrade.'
         exit 0
@@ -261,28 +305,12 @@ try {
         throw '新旧安装目录彼此嵌套，已拒绝迁移。'
     }
 
-    $oldExecutable = Join-Path $oldDirectory 'GlassDesk.exe'
-    if (-not (Test-Path -LiteralPath $oldExecutable -PathType Leaf)) {
-        throw '旧版主程序不存在，安装登记可能已失效。'
-    }
     Assert-NoReparsePoints $oldExecutable
 
     $uninstaller = Get-UninstallerPath ([string]$registration.UninstallString) $oldDirectory
-    $newExecutable = Join-Path $newDirectory 'GlassDesk.exe'
     $runCommand = '"' + $newExecutable + '" --autostart'
     if ($runCommand.Length -gt 260) {
         throw '所选安装路径过长，无法安全迁移登录启动项。'
-    }
-
-    $runningProcesses = @(Get-Process -Name 'GlassDesk' -ErrorAction SilentlyContinue)
-    foreach ($process in $runningProcesses) {
-        try {
-            if (Test-SamePath $process.MainModule.FileName $oldExecutable) {
-                throw '请先从系统托盘完全退出 GlassDesk，再重新运行安装程序。'
-            }
-        } catch [System.Management.Automation.MethodInvocationException] {
-            throw '无法确认 GlassDesk 是否仍在运行。请先从系统托盘退出所有 GlassDesk 窗口后重试。'
-        }
     }
 
     $oldData = Join-Path $oldDirectory 'Data'
@@ -367,7 +395,7 @@ try {
     }
     Set-Content -LiteralPath $stageStatePath -Value 'uninstall-complete' -Encoding UTF8
 
-    if (Test-Path -LiteralPath $oldExecutable) {
+    if ((Get-ExistingProductExecutables $oldDirectory).Count -gt 0) {
         throw '旧版程序文件仍存在，可能正在被占用。迁移数据已暂存，可关闭旧程序后重试。'
     }
 
@@ -379,16 +407,7 @@ try {
         Set-Content -LiteralPath $stageStatePath -Value 'data-restored' -Encoding UTF8
     }
 
-    if (Test-Path -LiteralPath $runKeyPath) {
-        $runKey = Get-ItemProperty -LiteralPath $runKeyPath
-        $runProperty = $runKey.PSObject.Properties[$runValueName]
-        $currentRunCommand = if ($null -ne $runProperty) { [string]$runProperty.Value } else { '' }
-        $oldRunCommand = '^\s*"' + [Regex]::Escape($oldExecutable) + '"\s+--autostart\s*$'
-        if ($currentRunCommand -match $oldRunCommand) {
-            Set-ItemProperty -LiteralPath $runKeyPath -Name $runValueName -Value $runCommand
-            Write-MigrationLog 'Updated the existing product-owned login startup path.'
-        }
-    }
+    Update-ProductStartupPath $newExecutable $oldExecutable
 
     Assert-NoReparsePointsInTree $script:stageRoot
     Remove-Item -LiteralPath $script:stageRoot -Recurse -Force
