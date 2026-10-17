@@ -15,6 +15,9 @@ public enum StartupRegistrationState
     /// <summary>同名值存在，但不属于当前可执行文件。</summary>
     OtherTarget,
 
+    /// <summary>同名值指向已移除的本产品旧版可执行文件。</summary>
+    StaleProductTarget,
+
     /// <summary>无法读取或校验注册状态。</summary>
     Unavailable,
 }
@@ -190,9 +193,50 @@ public sealed class StartupRegistration
             return new(StartupRegistrationState.OtherTarget, null, "同名登录启动项不是普通字符串值，LG Dsk 不会更改它。");
 
         var stored = key.GetValue(_valueName, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
-        return string.Equals(stored, expectedCommand, StringComparison.OrdinalIgnoreCase)
-            ? new(StartupRegistrationState.Owned, fullPath, null)
+        if (string.Equals(stored, expectedCommand, StringComparison.OrdinalIgnoreCase))
+            return new(StartupRegistrationState.Owned, fullPath, null);
+        return TryGetMissingLegacyProductTarget(stored, out var staleTarget)
+            ? new(StartupRegistrationState.StaleProductTarget, staleTarget, null)
             : new(StartupRegistrationState.OtherTarget, null, "同名登录启动项指向其它文件或包含其它参数。");
+    }
+
+    private static bool TryGetMissingLegacyProductTarget(string? command, out string? targetPath)
+    {
+        targetPath = null;
+        const string suffix = "\" --autostart";
+        if (string.IsNullOrWhiteSpace(command) || command.Length <= suffix.Length + 2
+            || command[0] != '"' || !command.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var candidate = command[1..^suffix.Length];
+        if (!Path.IsPathFullyQualified(candidate)
+            || !Path.GetFileNameWithoutExtension(candidate).Equals("GlassDesk", StringComparison.OrdinalIgnoreCase)
+                && !Path.GetFileNameWithoutExtension(candidate).Equals("LGDsk", StringComparison.OrdinalIgnoreCase)
+            || !Path.GetExtension(candidate).Equals(".exe", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        // A disconnected drive, inaccessible directory, or arbitrary missing copy must remain
+        // protected. Only repair a known product executable missing from an existing directory.
+        var parent = Path.GetDirectoryName(candidate);
+        if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent)) return false;
+        try
+        {
+            _ = File.GetAttributes(candidate);
+            return false;
+        }
+        catch (FileNotFoundException)
+        {
+            targetPath = candidate;
+            return true;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SecurityException or ArgumentException)
+        {
+            return false;
+        }
     }
 
     private void TryRemoveOwnedValue(string expectedCommand)

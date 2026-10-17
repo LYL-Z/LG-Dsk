@@ -85,7 +85,10 @@ public sealed class StartupRegistrationTests : IDisposable
     [InlineData(false)]
     public void OtherTarget不被覆盖或删除(bool enabled)
     {
-        const string other = "\"C:\\Other Copy\\GlassDesk.exe\" --autostart";
+        var otherPath = Path.Combine(_root, "Other Copy", "GlassDesk.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(otherPath)!);
+        File.WriteAllText(otherPath, "other installation");
+        var other = $"\"{otherPath}\" --autostart";
         _runKey.SetValue(ValueName, other, RegistryValueKind.String);
 
         var result = CreateRegistration().SetEnabled(_executablePath, enabled);
@@ -100,10 +103,60 @@ public sealed class StartupRegistrationTests : IDisposable
     {
         var registration = CreateRegistration();
         Assert.True(registration.SetEnabled(_executablePath, enabled: true).Succeeded);
-        const string other = "\"C:\\Moved Copy\\GlassDesk.exe\" --autostart";
+        var otherPath = Path.Combine(_root, "Moved Copy", "GlassDesk.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(otherPath)!);
+        File.WriteAllText(otherPath, "other installation");
+        var other = $"\"{otherPath}\" --autostart";
         _runKey.SetValue(ValueName, other, RegistryValueKind.String);
 
         Assert.Equal(StartupRegistrationState.OtherTarget, registration.Query(_executablePath).State);
+    }
+
+    [Fact]
+    public void 已删除的旧版程序启动路径可以由用户显式替换()
+    {
+        var registration = CreateRegistration();
+        var oldDirectory = Path.Combine(_root, "old install");
+        Directory.CreateDirectory(oldDirectory);
+        var oldPath = Path.Combine(oldDirectory, "GlassDesk.exe");
+        var oldCommand = $"\"{oldPath}\" --autostart";
+        _runKey.SetValue(ValueName, oldCommand, RegistryValueKind.String);
+
+        var stale = registration.Query(_executablePath);
+        var replaced = registration.SetEnabled(_executablePath, enabled: true);
+
+        Assert.Equal(StartupRegistrationState.StaleProductTarget, stale.State);
+        Assert.Equal(oldPath, stale.TargetPath);
+        Assert.True(replaced.Succeeded, replaced.Error);
+        Assert.Equal(StartupRegistrationState.Owned, registration.Query(_executablePath).State);
+        Assert.Equal($"\"{Path.GetFullPath(_executablePath)}\" --autostart", _runKey.GetValue(ValueName));
+    }
+
+    [Fact]
+    public void 已删除的旧版程序启动路径可由用户显式清除()
+    {
+        var registration = CreateRegistration();
+        var oldDirectory = Path.Combine(_root, "old install");
+        Directory.CreateDirectory(oldDirectory);
+        var oldPath = Path.Combine(oldDirectory, "LGDsk.exe");
+        _runKey.SetValue(ValueName, $"\"{oldPath}\" --autostart", RegistryValueKind.String);
+
+        var removed = registration.SetEnabled(_executablePath, enabled: false);
+
+        Assert.True(removed.Succeeded, removed.Error);
+        Assert.Equal(StartupRegistrationState.Missing, removed.Status.State);
+        Assert.Null(_runKey.GetValue(ValueName));
+    }
+
+    [Fact]
+    public void 不存在的其它程序路径仍受保护()
+    {
+        var otherPath = Path.Combine(_root, "Other App.exe");
+        _runKey.SetValue(ValueName, $"\"{otherPath}\" --autostart", RegistryValueKind.String);
+
+        var status = CreateRegistration().Query(_executablePath);
+
+        Assert.Equal(StartupRegistrationState.OtherTarget, status.State);
     }
 
     [Fact]

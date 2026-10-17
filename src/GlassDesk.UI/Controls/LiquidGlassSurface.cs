@@ -651,19 +651,31 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         var glass = Window.GetWindow(this) as GlassWindow;
         var radius = _panelShape is null ? glass?.PanelCornerRadius.TopLeft ?? 40 : _panelRadius;
         _lastRenderTicks = Stopwatch.GetTimestamp(); ++_renderCount;
+        var debugView = LiquidGlassDebugState.View;
+        var dark = ThemeService.Current?.IsDark != false;
+        var compatibleChrome = debugView == LiquidGlassDebugView.None && (_frameUsesAndroidGlass
+            || _frame is null && (ThemeService.Current?.Appearance.GlassMaterial ?? GlassMaterialMode.AndroidLiquidGlass)
+                is GlassMaterialMode.AndroidLiquidGlass or GlassMaterialMode.FrostedGlass);
+        var opticalFrameMatches = _frame is not null && _sampledGlassPanelBounds == rect
+            && _sampledGlassPanelRadius == radius;
+        var useTransitionMaterial = _transitionCaptureBounds is not null || !opticalFrameMatches;
+        var hasTransitionBackdrop = compatibleChrome && _transitionBackdrop is not null
+            && _transitionBackdropBounds.Contains(rect);
+        var hasSafeRevealFallback = compatibleChrome && useTransitionMaterial && !hasTransitionBackdrop;
         _lastRenderMaterialReady = ThemeService.Current?.UseOpaquePanels == true || _background.RequiresBasicBackground
             || _frame is not null && _sampledGlassPanelBounds == rect && _sampledGlassPanelRadius == radius
             || _transitionBackdrop is not null && _transitionBackdropBounds.Contains(rect)
             || _compatibilityBackdrop is not null && _compatibilityLayer.Opacity > 0
-                && _compatibilityLayer.RenderSize.Width > 0 && _compatibilityLayer.RenderSize.Height > 0;
+                && _compatibilityLayer.RenderSize.Width > 0 && _compatibilityLayer.RenderSize.Height > 0
+            || hasSafeRevealFallback;
         _firstVisibleRenderMaterialReady ??= _lastRenderMaterialReady;
         _firstVisibleMaterialSource ??= _compatibilityIsDesktopSnapshot && _compatibilityBackdrop is not null
             && _compatibilityLayer.Opacity > 0 ? "CurrentDesktopSnapshot"
             : _frame is not null || _transitionBackdrop is not null ? "CompletedLiveMaterial"
-            : ThemeService.Current?.UseOpaquePanels == true ? "OpaquePreference" : "AmbientCompatibility";
+            : ThemeService.Current?.UseOpaquePanels == true ? "OpaquePreference"
+            : hasSafeRevealFallback ? "SafeGlassFallback" : "AmbientCompatibility";
         var transition = Math.Clamp(_transitionProgress, 0, 1);
         var highlightScale = .48 + .52 * transition;
-        var debugView = LiquidGlassDebugState.View;
         Geometry CreatePanel(Rect bounds, double cornerRadius)
         {
             if (_panelShape is not null && bounds == rect && cornerRadius == radius)
@@ -673,7 +685,6 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
             return glass is null ? SquircleGlassGeometry.Create(bounds, cornerRadius)
                 : glass.CreateGlassPanelGeometry(bounds, cornerRadius);
         }
-        var dark = ThemeService.Current?.IsDark != false;
         if (debugView != LiquidGlassDebugView.None
             && (!LiquidGlassFinishComposer.IsComparisonView(debugView)
                 || LiquidGlassFinishComposer.IsBrdfComponentView(debugView)))
@@ -692,22 +703,16 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
             if (_background.RequiresBasicBackground) DrawCompatibilityNotice(dc, rect, "基础背景 · 正在恢复实时效果", dark);
             dc.Pop(); return;
         }
-        var compatibleChrome = debugView == LiquidGlassDebugView.None && (_frameUsesAndroidGlass
-            || _frame is null && (ThemeService.Current?.Appearance.GlassMaterial ?? GlassMaterialMode.AndroidLiquidGlass)
-                is GlassMaterialMode.AndroidLiquidGlass or GlassMaterialMode.FrostedGlass);
-        var opticalFrameMatches = _frame is not null && _sampledGlassPanelBounds == rect
-            && _sampledGlassPanelRadius == radius;
-        var useTransitionMaterial = _transitionCaptureBounds is not null || !opticalFrameMatches;
-        var hasTransitionBackdrop = compatibleChrome && _transitionBackdrop is not null
-            && _transitionBackdropBounds.Contains(rect);
-        if (compatibleChrome && useTransitionMaterial && !hasTransitionBackdrop)
+        if (hasSafeRevealFallback)
         {
-            // During first capture/expansion, paint a complete low-opacity body. A stale
-            // tiny frame must never leave just an outline on the expanding launcher.
-            var tint = dark ? (byte)18 : (byte)250;
-            dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(
-                (byte)Math.Round(255 * AndroidLiquidGlassRenderer.BodyOpacity * AndroidLiquidGlassRenderer.BodyTintScale(
-                    BackgroundClarity, UseLaunchpadOptics)), tint, tint, tint)), null, rect);
+            // A nearly transparent first frame on a layered HWND can be presented as black
+            // while DWM attaches the live desktop material. Use a complete warm fallback
+            // until a fresh capture arrives; never retain an old desktop image to hide it.
+            var top = dark ? Color.FromRgb(0x3B, 0x35, 0x31) : Color.FromRgb(0xFA, 0xF6, 0xEE);
+            var bottom = dark ? Color.FromRgb(0x2C, 0x28, 0x25) : Color.FromRgb(0xF0, 0xE8, 0xDC);
+            var fallback = new LinearGradientBrush(top, bottom, 90);
+            fallback.Freeze();
+            dc.DrawRectangle(fallback, null, rect);
         }
         if (opticalFrameMatches && (!compatibleChrome || _transitionCaptureBounds is null))
         {
@@ -925,6 +930,10 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         if (Window.GetWindow(this) is not { } revealOwner
             || revealOwner.IsVisible && IsBackdropActive?.Invoke() != false || ThemeService.Current?.UseOpaquePanels == true
             || BackdropRecovery.RequiresBasicRendering || host.Width <= 0 || host.Height <= 0) return;
+        // Window bounds alone do not describe a desktop scene: pets, videos, and other
+        // layered content can move while the HWND list stays identical. Never promote a
+        // hidden surface's old texture to the first frame of a new reveal.
+        RetireConcealedMaterial();
         var size = new Size(host.Width * 96d / dpi, host.Height * 96d / dpi);
         _revealOrigin = new Point(host.X, host.Y);
         _revealHost = host;

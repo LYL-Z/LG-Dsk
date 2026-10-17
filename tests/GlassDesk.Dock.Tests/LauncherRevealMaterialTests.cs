@@ -126,4 +126,42 @@ public sealed class LauncherRevealMaterialTests
             finally { window.Close(); }
         });
     }
+
+    [Fact]
+    public void RevealWithUnchangedWindowSceneDiscardsOldTextureAndSamplesCurrentDesktop()
+    {
+        StaTest.Run(() =>
+        {
+            var window = new LauncherWindow();
+            var surface = (LiquidGlassSurface)window.FindName("GlassSurface")!;
+            var scene = new GlassBackdropScene();
+            surface.ReadBackdropScene = () => scene;
+            var oldFrame = new WriteableBitmap(1, 1, 96, 96, System.Windows.Media.PixelFormats.Bgra32, null);
+            oldFrame.WritePixels(new(0, 0, 1, 1), new byte[] { 0, 0, 255, 255 }, 4, 0);
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            typeof(LiquidGlassSurface).GetField("_frame", flags)!.SetValue(surface, oldFrame);
+            typeof(LiquidGlassSurface).GetField("_frameScene", flags)!.SetValue(surface, scene);
+            var samples = 0;
+            surface.CaptureRevealBackdrop = (_, width, height) =>
+            {
+                samples++;
+                var pixels = new byte[width * height * 4];
+                for (var index = 0; index < pixels.Length; index += 4)
+                { pixels[index] = 220; pixels[index + 1] = 130; pixels[index + 2] = 70; pixels[index + 3] = 255; }
+                return pixels;
+            };
+
+            try
+            {
+                surface.PrepareRevealMaterial(new PixelRect(100, 100, 200, 100),
+                    new PixelRect(100, 100, 200, 100), 96);
+
+                Assert.Equal(1, samples);
+                Assert.True((bool)typeof(LiquidGlassSurface).GetField("_compatibilityIsDesktopSnapshot", flags)!.GetValue(surface)!);
+                Assert.Null(typeof(LiquidGlassSurface).GetField("_frame", flags)!.GetValue(surface));
+                Assert.Null(typeof(LiquidGlassSurface).GetField("_transitionBackdrop", flags)!.GetValue(surface));
+            }
+            finally { window.Close(); }
+        });
+    }
 }

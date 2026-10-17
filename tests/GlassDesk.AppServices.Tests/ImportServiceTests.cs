@@ -127,6 +127,30 @@ public class ImportServiceTests
     }
 
     [Fact]
+    public void 一次批量导入多个应用快捷方式()
+    {
+        using var workspace = new TempWorkspace();
+        using var services = Create(workspace);
+        var firstProgram = workspace.CreateProgram("Codex.cmd");
+        var secondProgram = workspace.CreateProgram("浏览器.cmd");
+        var firstShortcut = Path.Combine(workspace.Root, "Codex.lnk");
+        var secondShortcut = Path.Combine(workspace.Root, "浏览器.lnk");
+        Assert.True(ShortcutWriter.Write(firstShortcut, new ShortcutDefinition(firstProgram)));
+        Assert.True(ShortcutWriter.Write(secondShortcut, new ShortcutDefinition(secondProgram)));
+
+        var result = services.Import.ImportItems(
+        [
+            new ImportRequest { Source = firstShortcut },
+            new ImportRequest { Source = secondShortcut },
+        ]);
+
+        Assert.Equal(2, result.Added.Count);
+        Assert.Empty(result.Failures);
+        Assert.Contains(result.Added, item => item.Target == firstProgram);
+        Assert.Contains(result.Added, item => item.Target == secondProgram);
+    }
+
+    [Fact]
     public void 导入指向网址的快捷方式时识别为网页()
     {
         using var workspace = new TempWorkspace();

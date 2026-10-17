@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "productName": "LG Dsk",
-  "productVersion": "1.4.2",
+  "productVersion": "1.4.3",
   "assemblyVersion": "0.2.2.0",
-  "fileVersion": "1.4.2.0",
+  "fileVersion": "1.4.3.0",
   "appId": "GlassDesk.Independent",
   "rid": "win-x64",
   "status": "local-candidate",
-  "packageBaseName": "LG-Dsk-1.4.2-win-x64",
+  "packageBaseName": "LG-Dsk-1.4.3-win-x64",
   "dotnetSdkVersion": "10.0.401",
   "runtimeVersion": "10.0.12",
   "innoVersion": "7.1.0"

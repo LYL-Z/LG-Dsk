@@ -168,7 +168,7 @@ internal static class FullscreenProbe
             Background = new SolidColorBrush(Color.FromRgb(0x12, 0x12, 0x18)),
             Content = new TextBlock
             {
-                Text = "GlassDesk 全屏检测实测中（约 1 秒后自动退出）",
+                Text = "LG Dsk 全屏检测实测中（约 1 秒后自动退出）",
                 Foreground = Brushes.White,
                 FontSize = 20,
                 HorizontalAlignment = HorizontalAlignment.Center,

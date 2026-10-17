@@ -150,11 +150,13 @@ public partial class SettingsWindow : GlassWindow
 
             var status = _startupRegistration.Query(_startupExecutablePath);
             AutostartCheck.IsChecked = status.State == StartupRegistrationState.Owned;
-            AutostartCheck.IsEnabled = status.State is StartupRegistrationState.Missing or StartupRegistrationState.Owned;
+            AutostartCheck.IsEnabled = status.State is StartupRegistrationState.Missing
+                or StartupRegistrationState.Owned or StartupRegistrationState.StaleProductTarget;
             AutostartStatus.Text = status.State switch
             {
                 StartupRegistrationState.Missing => "未注册；默认关闭。",
                 StartupRegistrationState.Owned => "已注册到当前用户登录项。Windows 的“启动应用”设置仍可禁用它。",
+                StartupRegistrationState.StaleProductTarget => $"发现失效的旧版启动路径：{status.TargetPath}。勾选后会替换为当前 LG Dsk，不会影响其它启动项。",
                 StartupRegistrationState.OtherTarget => "同名启动项指向其它位置；为保护其它副本，此处不会覆盖或删除它。",
                 _ => "无法读取或校验当前用户登录项：" + (status.Error ?? "原因未知。"),
             };

@@ -159,6 +159,22 @@ public sealed class GlassPerformanceLifecycleTests
     }
 
     [Fact]
+    public void ColdRevealUsesWarmOpaqueFallbackInsteadOfATransparentDarkFrame()
+    {
+        StaTest.Run(() =>
+        {
+            using var surface = new LiquidGlassSurface { ReadBackdropScene = () => new() };
+            surface.SetPanelShape(new Rect(20, 10, 160, 80), 20);
+            var pixels = Render(surface);
+            var center = pixels.AsSpan((50 * 200 + 100) * 4, 4);
+
+            Assert.Equal(255, center[3]);
+            Assert.True(center[1] >= 35, $"Expected a safe warm fallback, got BGRA {string.Join(',', center.ToArray())}.");
+            Assert.Equal("SafeGlassFallback", Get(surface, "_firstVisibleMaterialSource"));
+        });
+    }
+
+    [Fact]
     public void ChangedSceneFirstPaintHasCompleteMaterialWithoutThePreviousApplicationPixels()
     {
         StaTest.Run(() =>

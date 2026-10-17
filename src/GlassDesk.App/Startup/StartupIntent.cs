@@ -32,8 +32,8 @@ internal static class StartupIntent
 
     public static string GetLegacyInstanceBlockMessage(LegacyInstanceStatus status) => status switch
     {
-        LegacyInstanceStatus.Running => "检测到仍在运行的旧版 GlassDesk 实例。为避免新旧版本同时修改同一份用户数据，请先从旧版托盘菜单退出后重试。",
-        LegacyInstanceStatus.Unknown => "无法确认旧版 GlassDesk 实例是否仍在运行。为保护用户数据，本次启动已阻止；请确认旧版完全退出后重试。",
+        LegacyInstanceStatus.Running => "检测到仍在运行的旧版 LG Dsk 实例。为避免多个版本同时修改同一份用户数据，请先从旧版托盘菜单退出后重试。",
+        LegacyInstanceStatus.Unknown => "无法确认旧版 LG Dsk 实例是否仍在运行。为保护用户数据，本次启动已阻止；请确认旧版完全退出后重试。",
         _ => string.Empty,
     };
 }

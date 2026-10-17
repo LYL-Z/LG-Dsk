@@ -552,7 +552,7 @@ public sealed class DockTileStrip : Border
             // 失败已由状态机恢复原顺序；给用户一句能听懂的解释。
             System.Windows.MessageBox.Show(
                 "排序没能保存，可能是数据文件暂时写不了。顺序已恢复原样。",
-                "GlassDesk",
+                "LG Dsk",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
         }

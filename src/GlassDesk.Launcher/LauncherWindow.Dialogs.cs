@@ -18,9 +18,15 @@ public partial class LauncherWindow
     {
         var menu = CreateTrackedContextMenu();
         menu.PlacementTarget = sender as Button;
-        AddMenu(menu, "文件、程序或快捷方式…", () =>
+        AddMenu(menu, "批量添加应用、文件或快捷方式（可多选）…", () =>
         {
-            var picker = new OpenFileDialog { Multiselect = true, Filter = "所有文件|*.*" };
+            var picker = new OpenFileDialog
+            {
+                Title = "选择要添加的应用、文件或快捷方式（按 Ctrl 或 Shift 可多选）",
+                Multiselect = true,
+                DereferenceLinks = false,
+                Filter = "所有文件|*.*",
+            };
             if (ShowModalDialog(() => picker.ShowDialog(this))) ImportPaths(picker.FileNames);
         });
         AddMenu(menu, "文件夹…", () =>
