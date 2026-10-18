@@ -46,6 +46,19 @@ public sealed class PrimaryDisplaySession
         return true;
     }
 
+    /// <summary>
+    /// Refreshes work-area/DPI metrics only when the original primary monitor is still present.
+    /// A transient null or a primary-monitor change is left to the host's display-rebind flow.
+    /// </summary>
+    public bool TryRefreshMetrics(DisplayInfo? currentPrimary)
+    {
+        if (RequiresRestart || currentPrimary is null || !currentPrimary.IsPrimary
+            || !string.Equals(currentPrimary.DeviceName, Display.DeviceName, StringComparison.OrdinalIgnoreCase))
+            return false;
+        Volatile.Write(ref _display, currentPrimary);
+        return true;
+    }
+
     /// <summary>Called by the host on its dispatcher after suspending old display interaction.</summary>
     public bool TryRebindPrimary(DisplayInfo? currentPrimary)
     {

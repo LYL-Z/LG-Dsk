@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Text.RegularExpressions;
 using GlassDesk.AppServices.Updates;
 
 namespace GlassDesk.App.Updates;
@@ -9,7 +10,7 @@ namespace GlassDesk.App.Updates;
 /// <summary>A single release prompt whose download lifetime belongs to the open window.</summary>
 internal sealed class UpdateWindow : Window, IDisposable
 {
-    private readonly Func<IProgress<int>, CancellationToken, Task> _install;
+    private readonly Func<IProgress<UpdateDownloadProgress>, CancellationToken, Task> _install;
     private readonly CancellationTokenSource _cancellation = new();
     private readonly TextBlock _status;
     private readonly ProgressBar _progress;
@@ -19,7 +20,7 @@ internal sealed class UpdateWindow : Window, IDisposable
     private bool _handedOff;
     private bool _disposed;
 
-    public UpdateWindow(UpdateRelease release, bool canInstall, Func<IProgress<int>, CancellationToken, Task> install)
+    public UpdateWindow(UpdateRelease release, bool canInstall, Func<IProgress<UpdateDownloadProgress>, CancellationToken, Task> install)
     {
         _install = install;
         Title = "LG Dsk 更新";
@@ -33,7 +34,7 @@ internal sealed class UpdateWindow : Window, IDisposable
             grid.RowDefinitions.Add(new RowDefinition { Height = height });
         Add(new TextBlock { Text = $"发现新版本 {release.Version}", FontSize = 24, FontWeight = FontWeights.SemiBold }, 0);
         Add(new TextBlock { Text = "下载完成后会关闭 LG Dsk，安装更新并重新打开。", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 16) }, 1);
-        var notes = new TextBlock { Text = string.IsNullOrWhiteSpace(release.Notes) ? "此版本未提供更新说明。" : release.Notes, TextWrapping = TextWrapping.Wrap, LineHeight = 23 };
+        var notes = new TextBlock { Text = FormatReleaseNotes(release.Notes), TextWrapping = TextWrapping.Wrap, LineHeight = 23 };
         AutomationProperties.SetName(notes, "更新说明");
         Add(new ScrollViewer { Content = notes, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Margin = new Thickness(0, 0, 0, 16) }, 2);
         _status = new TextBlock { Text = canInstall ? "准备好后点击“立即更新”。" : "当前程序以便携方式运行或安装登记不匹配。请先手动安装正式安装包。", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
@@ -84,11 +85,19 @@ internal sealed class UpdateWindow : Window, IDisposable
         _status.Text = "正在下载更新 0%";
         try
         {
-            await _install(new Progress<int>(value =>
+            await _install(new Progress<UpdateDownloadProgress>(value =>
             {
                 if (_handedOff || _cancellation.IsCancellationRequested) return;
-                _progress.Value = value;
-                _status.Text = value == 100 ? "下载完成，正在核验安装信息…" : $"正在下载更新 {value}%";
+                _progress.Value = value.Percent;
+                if (value.Percent >= 100)
+                    _status.Text = "下载完成，正在核验安装信息…";
+                else
+                {
+                    var transfer = $"已下载 {FormatBytes(value.ReceivedBytes)} / {FormatBytes(value.TotalBytes)}（{value.Percent}%）";
+                    var attempt = value.Attempt > 1 ? $" · 第 {value.Attempt} 次尝试" : string.Empty;
+                    var resume = value.IsResuming ? " · 正在续传" : string.Empty;
+                    _status.Text = transfer + attempt + resume;
+                }
             }), _cancellation.Token);
         }
         catch (OperationCanceledException)
@@ -122,5 +131,31 @@ internal sealed class UpdateWindow : Window, IDisposable
         };
         AutomationProperties.SetName(button, automationName);
         return button;
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        var megabytes = Math.Max(0, bytes) / (1024d * 1024d);
+        return $"{megabytes:0.0} MB";
+    }
+
+    private static string FormatReleaseNotes(string notes)
+    {
+        if (string.IsNullOrWhiteSpace(notes)) return "此版本未提供更新说明。";
+        var output = new List<string>();
+        foreach (var rawLine in notes.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0 || line.StartsWith("```", StringComparison.Ordinal)) continue;
+            line = line.TrimStart('#', ' ')
+                .Replace("**", string.Empty, StringComparison.Ordinal)
+                .Replace("__", string.Empty, StringComparison.Ordinal)
+                .Replace('`', ' ');
+            line = Regex.Replace(line, @"\[([^\]]+)\]\([^)]+\)", "$1");
+            line = Regex.Replace(line, @"^[-*+]\s+", "• ");
+            line = Regex.Replace(line, @"^\d+\.\s+", "• ");
+            output.Add(line.Trim());
+        }
+        return output.Count == 0 ? "此版本未提供更新说明。" : string.Join(Environment.NewLine, output);
     }
 }

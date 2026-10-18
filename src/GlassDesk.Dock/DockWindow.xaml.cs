@@ -52,6 +52,9 @@ public partial class DockWindow : GlassWindow
     private readonly ObservableCollection<RunningAppTile> _switcherItems = [];
     private readonly Dictionary<string, BitmapSource?> _switcherIconCache = new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<RunningBackgroundAppItem> _backgroundAppItems = [];
+    private IReadOnlyList<NotificationAreaAppItem> _trayAppItems = [];
+    private System.Windows.Threading.DispatcherTimer? _appIslandHoverCollapseTimer;
+    private bool _appIslandHoverExpanded;
     private DockPresentationMode _presentationMode = DockPresentationMode.DesktopDock;
     private double _cachedDockContentWidthDip;
     private long _switcherInventoryGeneration;
@@ -738,6 +741,7 @@ public partial class DockWindow : GlassWindow
             case "showdesktop":
                 // D-13：实现依据探针 D 的实测结论（逐窗口 SW_MINIMIZE）。
                 _ = DesktopCommands.ShowDesktop();
+                _ = RefreshPlacementAfterShellDesktopChangeAsync();
                 break;
 
             case "recyclebin":
@@ -1285,9 +1289,23 @@ public partial class DockWindow : GlassWindow
     public bool SuppressPassiveTriggersWhenFullscreen { get; set; } = true;
     public void RefreshDisplayPlacement()
     {
+        if (PrimaryDisplaySession is { IsAvailable: true } session)
+            session.TryRefreshMetrics(DisplayService.Primary());
         ApplyFrameLength();
         ApplyStripMetrics();
         PositionOnDisplay();
+    }
+
+    private async Task RefreshPlacementAfterShellDesktopChangeAsync()
+    {
+        // Explorer updates the taskbar work area after minimizing the last foreground window.
+        // Refresh twice around that shell notification so the Dock moves without an app restart.
+        foreach (var delay in new[] { 180, 620 })
+        {
+            await Task.Delay(delay);
+            if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
+            RefreshDisplayPlacement();
+        }
     }
 
     public void StopForPrimaryDisplayChange()
@@ -1331,9 +1349,13 @@ public partial class DockWindow : GlassWindow
         var widthPixels = Math.Max(1, display.ToPixels(widthDips));
         var heightPixels = Math.Max(1, display.ToPixels(heightDips));
 
-        _restingRect = _presentationMode == DockPresentationMode.RunningAppIsland
+        var topIslandPosition = _presentationMode == DockPresentationMode.RunningAppIsland
+            || _presentationMode == DockPresentationMode.RunningAppSwitcher && _fullscreenAppIslandContext;
+        var placement = topIslandPosition ? DockPlacement.TopCenter : Settings.Placement;
+        var usableWorkArea = EffectiveWorkArea(display);
+        _restingRect = topIslandPosition
             ? DockPlacementCalculator.Calculate(
-                display.WorkArea,
+                usableWorkArea,
                 DockPlacement.TopCenter,
                 0,
                 10,
@@ -1341,7 +1363,7 @@ public partial class DockWindow : GlassWindow
                 heightPixels,
                 display.Dpi)
             : DockPlacementCalculator.Calculate(
-                display.WorkArea,
+                usableWorkArea,
                 Settings.Placement,
                 Settings.OffsetX,
                 Settings.OffsetY,
@@ -1349,15 +1371,25 @@ public partial class DockWindow : GlassWindow
                 heightPixels,
                 display.Dpi);
 
-        if (PrimaryDisplaySession is { IsAvailable: true } session)
-            _restingRect = session.ClampWindowToWorkArea(_restingRect);
-
-        var placement = _presentationMode == DockPresentationMode.RunningAppIsland
-            ? DockPlacement.TopCenter
-            : Settings.Placement;
+        _restingRect = ClampToArea(_restingRect, usableWorkArea);
         _fullyHiddenOffsetPixels = SlideOutDistancePixels(_restingRect, display.Bounds, placement);
 
         ApplySlide(_restingRect, _slideOffsetPixels);
+    }
+
+    private static PixelRect EffectiveWorkArea(DisplayInfo display)
+    {
+        var workArea = display.WorkArea;
+        return TaskbarWorkAreaCalculator.ExcludeTaskbar(display.Bounds, workArea,
+            FullscreenDetector.GetTaskbarBounds());
+    }
+
+    private static PixelRect ClampToArea(PixelRect requested, PixelRect area)
+    {
+        var width = Math.Max(1, Math.Min(requested.Width, area.Width));
+        var height = Math.Max(1, Math.Min(requested.Height, area.Height));
+        return new PixelRect(Math.Clamp(requested.X, area.X, area.Right - width),
+            Math.Clamp(requested.Y, area.Y, area.Bottom - height), width, height);
     }
 
     /// <summary>保持 HWND 在主屏工作区内，只在窗口剪裁范围内滑动内容与共享面板几何。</summary>
@@ -1414,6 +1446,7 @@ public partial class DockWindow : GlassWindow
     /// <summary>内容滑出方向：底部 Dock 向下 +1，顶部 Dock 向上 −1。</summary>
     private int SlideOutDirection()
         => _presentationMode == DockPresentationMode.RunningAppIsland
+            || _presentationMode == DockPresentationMode.RunningAppSwitcher && _fullscreenAppIslandContext
             || Settings.Placement == DockPlacement.TopCenter ? -1 : 1;
 
     /// <summary>内容完全隐藏所需的物理像素偏移，窗口 HWND 本身始终留在主屏内。</summary>
@@ -1477,7 +1510,11 @@ public partial class DockWindow : GlassWindow
             ForegroundCoverage.IsExternalApplicationForeground(), _settingsWindowVisible);
         var hasSwitcherContent = _switcherItems.Count > 0;
         if (!externalForeground && !_settingsWindowVisible)
+        {
+            _appIslandHoverExpanded = false;
+            _appIslandHoverCollapseTimer?.Stop();
             SetRunningAppSwitcherRequested(false);
+        }
         var appIslandRequested = _fullscreenAppIslandEnabled && _fullscreenAppIslandContext
             && externalForeground && !_settingsWindowVisible && !_launcherContainerActive;
         var mode = DockPresentationPolicy.Resolve(
@@ -1485,7 +1522,7 @@ public partial class DockWindow : GlassWindow
             ForegroundCoverage.IsExternalApplicationForeground(),
             fullscreen,
             hasSwitcherContent,
-            _switcherRequested,
+            _switcherRequested || _appIslandHoverExpanded,
             _settingsWindowVisible,
             appIslandRequested);
         ApplyPresentationMode(mode);
@@ -1636,12 +1673,14 @@ public partial class DockWindow : GlassWindow
 
         try
         {
-            var backgroundItems = await Task.Run(() =>
+            var inventory = await Task.Run(() =>
             {
                 running.ReconcileOnDemand();
                 var windows = running.LastWindows.ToArray();
                 var processes = RunningBackgroundAppItems.EnumerateCurrentProcesses();
-                return RunningBackgroundAppItems.Create(entries, windows, processes, ownProcessId);
+                var background = RunningBackgroundAppItems.Create(entries, windows, processes, ownProcessId);
+                var tray = NotificationAreaAppItems.EnumerateAccessibleItems();
+                return (background, tray);
             });
 
             if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished
@@ -1649,7 +1688,8 @@ public partial class DockWindow : GlassWindow
                 || _presentationMode is not (DockPresentationMode.RunningAppSwitcher or DockPresentationMode.RunningAppIsland))
                 return;
 
-            _backgroundAppItems = backgroundItems;
+            _backgroundAppItems = inventory.background;
+            _trayAppItems = inventory.tray;
             RefreshSwitcherItems();
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
@@ -1696,15 +1736,45 @@ public partial class DockWindow : GlassWindow
                 BackgroundProcessCount: item.ProcessCount));
         }
 
-        UpdateSwitcherSummary(items.Count, _backgroundAppItems.Count);
+        var pinnedModels = _models.Where(model => !model.IsMissing).ToArray();
+        foreach (var pinned in pinnedModels)
+        {
+            var glyph = pinned.DisplayName.Length == 0 ? "·" : pinned.DisplayName[..1].ToUpperInvariant();
+            _switcherItems.Add(new RunningAppTile(
+                0,
+                0,
+                pinned.DisplayName,
+                $"{pinned.DisplayName} · 固定应用 · 点击打开或切换",
+                glyph,
+                pinned.Icon as BitmapSource,
+                false,
+                EntryId: pinned.EntryId,
+                IsPinnedApp: true));
+        }
+
+        foreach (var item in _trayAppItems)
+        {
+            var glyph = item.DisplayName.Length == 0 ? "·" : item.DisplayName[..1].ToUpperInvariant();
+            _switcherItems.Add(new RunningAppTile(
+                0,
+                0,
+                item.DisplayName,
+                item.ToolTipText,
+                glyph,
+                null,
+                false,
+                IsTrayApp: true));
+        }
+
+        UpdateSwitcherSummary(items.Count, _backgroundAppItems.Count, pinnedModels.Length, _trayAppItems.Count);
     }
 
-    private void UpdateSwitcherSummary(int windowCount, int backgroundCount)
+    private void UpdateSwitcherSummary(int windowCount, int backgroundCount, int pinnedCount, int trayCount)
     {
-        var text = $"窗口 {windowCount} · 后台 {backgroundCount}";
+        var text = $"窗口 {windowCount} · 固定 {pinnedCount} · 后台 {backgroundCount} · 托盘 {trayCount}";
         SwitcherSummaryText.Text = text;
         AppIslandCountsText.Text = text;
-        NoRunningAppsText.Visibility = windowCount + backgroundCount == 0
+        NoRunningAppsText.Visibility = windowCount + backgroundCount + pinnedCount + trayCount == 0
             ? Visibility.Visible
             : Visibility.Collapsed;
     }
@@ -1757,10 +1827,20 @@ public partial class DockWindow : GlassWindow
     {
         if ((sender as FrameworkElement)?.DataContext is not RunningAppTile item) return;
         if (!item.IsWindowSwitchable) return;
+        _appIslandHoverExpanded = false;
+        _appIslandHoverCollapseTimer?.Stop();
         SetRunningAppSwitcherRequested(false);
         OnAutoHideFrame();
-        var outcome = LaunchService.ActivateWindow(item.Handle);
-        if (outcome.Outcome != ActivationOutcome.Activated)
+        var outcome = item.IsPinnedApp && item.EntryId is { } entryId
+            ? _services?.Launch.ActivateOrLaunch(entryId)
+            : LaunchService.ActivateWindow(item.Handle);
+        if (outcome is null) return;
+        if (outcome.Outcome == ActivationOutcome.MultipleWindowsFound)
+        {
+            ShowWindowChooser(outcome.Candidates);
+            return;
+        }
+        if (outcome.Outcome is not (ActivationOutcome.Activated or ActivationOutcome.Launched))
             ShowFailureNotice(outcome.Message ?? "没能切换到该应用窗口。");
     }
 
@@ -1780,6 +1860,8 @@ public partial class DockWindow : GlassWindow
             _services?.Running.ReconcileOnDemand();
             RefreshSwitcherItems();
         }
+        _appIslandHoverExpanded = false;
+        _appIslandHoverCollapseTimer?.Stop();
         SetRunningAppSwitcherRequested(canShow && !_switcherRequested);
         if (_frameTimer is not null)
         {
@@ -1791,10 +1873,63 @@ public partial class DockWindow : GlassWindow
 
     private void OnAppIslandClick(object sender, RoutedEventArgs e) => ToggleRunningAppSwitcher();
 
+    private void OnAppIslandMouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (!_fullscreenAppIslandEnabled || !_fullscreenAppIslandContext || _settingsWindowVisible
+            || !ForegroundCoverage.IsExternalApplicationForeground()) return;
+        if (!_switcherRequested) _appIslandHoverExpanded = true;
+        if (_appIslandHoverExpanded) ScheduleAppIslandHoverCollapse();
+        else _appIslandHoverCollapseTimer?.Stop();
+        WakeSwitcherFrame();
+    }
+
+    private void OnSwitcherHoverEnter(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        _appIslandHoverCollapseTimer?.Stop();
+    }
+
+    private void OnSwitcherHoverLeave(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (!_appIslandHoverExpanded || _switcherRequested) return;
+        ScheduleAppIslandHoverCollapse();
+    }
+
+    private void ScheduleAppIslandHoverCollapse()
+    {
+        _appIslandHoverCollapseTimer ??= new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(700),
+        };
+        _appIslandHoverCollapseTimer.Tick -= OnAppIslandHoverCollapseTick;
+        _appIslandHoverCollapseTimer.Tick += OnAppIslandHoverCollapseTick;
+        _appIslandHoverCollapseTimer.Stop();
+        _appIslandHoverCollapseTimer.Start();
+    }
+
+    private void OnAppIslandHoverCollapseTick(object? sender, EventArgs e)
+    {
+        _appIslandHoverCollapseTimer?.Stop();
+        if (!_appIslandHoverExpanded || _switcherRequested || SwitcherContentLayer.IsMouseOver) return;
+        _appIslandHoverExpanded = false;
+        WakeSwitcherFrame();
+    }
+
+    private void WakeSwitcherFrame()
+    {
+        if (_frameTimer is not null)
+        {
+            _frameTimer.Interval = FrameInterval;
+            _frameTimer.IsEnabled = true;
+        }
+        OnAutoHideFrame();
+    }
+
     private void OnCloseSwitcherClick(object sender, RoutedEventArgs e)
     {
+        _appIslandHoverExpanded = false;
+        _appIslandHoverCollapseTimer?.Stop();
         SetRunningAppSwitcherRequested(false);
-        OnAutoHideFrame();
+        WakeSwitcherFrame();
     }
 
     private void SetRunningAppSwitcherRequested(bool requested)
@@ -1819,6 +1954,7 @@ public partial class DockWindow : GlassWindow
     {
         _frameTimer?.Stop();
         _switcherInventoryTimer?.Stop();
+        _appIslandHoverCollapseTimer?.Stop();
         Interlocked.Increment(ref _switcherInventoryGeneration);
         _failureNoticeTimer?.Stop();
         if (_dockSettings is not null)

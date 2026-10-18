@@ -45,7 +45,7 @@ public sealed class DockPresentationPolicyTests
     }
 
     [Fact]
-    public void FullscreenAppIslandCanBeAdmittedByShellObservationEvenWhenGeometryProbeIsFalse()
+    public void AutoHideAppIslandCanBeAdmittedForAnExternalWindowThatIsNotGeometricallyFullscreen()
     {
         var mode = DockPresentationPolicy.Resolve(
             launcherActive: false,
@@ -107,5 +107,20 @@ public sealed class DockPresentationPolicyTests
         Assert.Equal("Music", item.DisplayName);
         Assert.Equal(2, item.ProcessCount);
         Assert.Contains("后台运行", item.ToolTipText);
+    }
+
+    [Fact]
+    public void PinnedAppsCanLaunchButBackgroundAndTrayInventoryIsReadOnly()
+    {
+        var pinned = new RunningAppTile(0, 0, "Browser", "Browser", "B", null, false,
+            EntryId: "browser", IsPinnedApp: true);
+        var background = new RunningAppTile(0, 101, "Music", "Music background", "M", null, false,
+            IsBackgroundOnly: true, BackgroundProcessCount: 1);
+        var tray = new RunningAppTile(0, 0, "Sync", "Sync tray icon", "S", null, false,
+            IsTrayApp: true);
+
+        Assert.True(pinned.IsWindowSwitchable);
+        Assert.False(background.IsWindowSwitchable);
+        Assert.False(tray.IsWindowSwitchable);
     }
 }

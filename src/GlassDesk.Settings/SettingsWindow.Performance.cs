@@ -43,6 +43,6 @@ public partial class SettingsWindow
             return;
         }
         PerformanceSettingsChanged?.Invoke(this, EventArgs.Empty);
-        PerformanceSettingsStatus.Text = "已保存并应用。应用岛只在任务栏自动隐藏且前台处于全屏时出现；可在这里关闭。";
+        PerformanceSettingsStatus.Text = "已保存并应用。应用岛会在任务栏自动隐藏且其他应用位于前台时出现；鼠标移入即可展开。";
     }
 }

@@ -51,6 +51,20 @@ public sealed class PrimaryDisplaySessionTests
     }
 
     [Fact]
+    public void Optional_metrics_refresh_does_not_invalidate_session_during_transient_null_or_identity_change()
+    {
+        var original = Display("DISPLAY1", true,
+            new PixelRect(0, 0, 1920, 1080), new PixelRect(0, 0, 1920, 1040), 96);
+        var session = new PrimaryDisplaySession(original);
+
+        Assert.False(session.TryRefreshMetrics(null));
+        Assert.False(session.TryRefreshMetrics(Display("DISPLAY2", true,
+            new PixelRect(1920, 0, 2560, 1440), new PixelRect(1920, 0, 2560, 1400), 144)));
+        Assert.True(session.IsAvailable);
+        Assert.Equal(original, session.Display);
+    }
+
+    [Fact]
     public void PrimaryIdentityChangeRequiresRestartAndCannotRebindToNewDisplay()
     {
         var session = new PrimaryDisplaySession(Display("DISPLAY1", true,

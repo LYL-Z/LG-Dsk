@@ -112,7 +112,11 @@ public abstract class GlassWindow : Window
 
         // 分层窗口，理由见类注释第 2 条。
         AllowsTransparency = true;
-        Background = Brushes.Transparent;
+        // Give the layered HWND a complete warm first frame before WPF/DWM attaches
+        // its backdrop. The panel clip still makes all pixels outside the glass transparent.
+        var warmFirstFrame = new SolidColorBrush(Color.FromRgb(0xFA, 0xF6, 0xEE));
+        warmFirstFrame.Freeze();
+        Background = warmFirstFrame;
 
         UseLayoutRounding = true;
         SnapsToDevicePixels = true;

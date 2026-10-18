@@ -284,7 +284,7 @@
               <TextBlock x:Name="ShortcutsSectionHeading" FontSize="16" FontWeight="SemiBold" Text="快捷操作"
                          Foreground="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
               <TextBlock Margin="0,6,0,10" TextWrapping="Wrap" Text="点击当前快捷键即可录制键盘组合、标点键、鼠标侧键或滚轮方向，录制后自动保存。Esc 取消，Backspace / Delete 清除绑定。" />
-              <TextBlock Margin="0,0,0,8" TextWrapping="Wrap" Text="Dock 在应用前台时不会因鼠标经过而弹出。按下切换快捷键可呼出液态玻璃应用条，切换已检测到的窗口（含最小化窗口）；再按一次快捷键可收起。启用下方应用岛后，若 Windows 任务栏设置为自动隐藏且应用全屏，会在屏幕上方显示一个紧凑入口，点击后展开应用条。部分独占全屏程序可能盖住桌面浮层，此时可用 Windows 的 Alt+Tab 切换。" />
+              <TextBlock Margin="0,0,0,8" TextWrapping="Wrap" Text="Dock 在应用前台时不会因鼠标经过而弹出。按下切换快捷键可呼出液态玻璃应用条，切换已检测到的窗口；再按一次快捷键可收起。启用应用岛后，只要 Windows 任务栏自动隐藏且其他应用位于前台，屏幕上沿就会显示紧凑入口，鼠标移入即可展开。部分独占全屏程序可能盖住桌面浮层，此时可用 Windows 的 Alt+Tab 切换。" />
               <UniformGrid Columns="2">
                 <TextBlock Margin="0,7" Text="打开/关闭启动台" /><settings:ShortcutRecorder x:Name="ToggleLauncherHotkeyBox" AutomationProperties.Name="打开/关闭启动台快捷键"  RecordingCompleted="OnShortcutRecordingCompleted" />
                 <TextBlock Margin="0,7" Text="下一页" /><settings:ShortcutRecorder x:Name="NextPageHotkeyBox" AutomationProperties.Name="下一页快捷键"  RecordingCompleted="OnShortcutRecordingCompleted" />
@@ -300,10 +300,10 @@
               <CheckBox x:Name="AutoSuspendWhenFullscreenCheck" Margin="0,10,0,8" Content="全屏应用运行时自动休眠"
                         AutomationProperties.Name="全屏应用运行时自动休眠" IsEnabled="False"
                         Checked="OnPerformanceControlChanged" Unchecked="OnPerformanceControlChanged" />
-              <TextBlock TextWrapping="Wrap" Text="全屏应用时收起 Dock 并暂停高频背景处理。应用岛会维持轻量窗口状态跟踪，供你查看窗口与应用库中正在后台运行的程序；展开应用条后可切换有窗口的应用。独占全屏程序可以覆盖普通桌面浮层。" />
+              <TextBlock TextWrapping="Wrap" Text="全屏应用时收起 Dock 并暂停高频背景处理。任务栏自动隐藏时，应用岛显示 Dock 固定项、已打开窗口、应用库中匹配到的后台进程，以及 Windows 可访问性树公开的托盘图标；鼠标经过岛即可展开并切换窗口或打开固定应用。托盘图标清单受 Windows 辅助功能树限制，未公开给辅助功能的隐藏图标无法保证读取。独占全屏程序可以覆盖普通桌面浮层。" />
               <CheckBox x:Name="FullscreenAppIslandCheck" Margin="0,0,0,8"
-                        Content="任务栏自动隐藏且全屏时显示应用岛"
-                        AutomationProperties.Name="全屏时显示应用岛"
+                        Content="任务栏自动隐藏时显示应用岛"
+                        AutomationProperties.Name="任务栏自动隐藏时显示应用岛"
                         IsEnabled="False"
                         Checked="OnPerformanceControlChanged" Unchecked="OnPerformanceControlChanged" />
               <TextBlock x:Name="PerformanceSettingsStatus" Margin="0,8,0,14" TextWrapping="Wrap"

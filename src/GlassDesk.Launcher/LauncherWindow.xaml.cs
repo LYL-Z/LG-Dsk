@@ -222,7 +222,29 @@ public partial class LauncherWindow : GlassWindow
     {
         _keepOpenWhileModalCount++;
         try { return showDialog() == true; }
-        finally { _keepOpenWhileModalCount = Math.Max(0, _keepOpenWhileModalCount - 1); }
+        finally
+        {
+            _keepOpenWhileModalCount = Math.Max(0, _keepOpenWhileModalCount - 1);
+            ScheduleBackdropRecoveryAfterModalDialog();
+        }
+    }
+
+    private void ScheduleBackdropRecoveryAfterModalDialog()
+    {
+        var refreshTimer = new System.Windows.Threading.DispatcherTimer(
+            System.Windows.Threading.DispatcherPriority.ContextIdle, Dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(140),
+        };
+        refreshTimer.Tick += (_, _) =>
+        {
+            refreshTimer.Stop();
+            if (!IsVisible) return;
+            GlassDesk.UI.BackdropRecovery.RetryBackground("LauncherModalDialogClosed");
+            GlassSurface.RetireConcealedMaterial();
+            GlassSurface.RequestBackdropRefresh(revealing: true);
+        };
+        refreshTimer.Start();
     }
     public void NavigatePage(int delta)
     {
@@ -262,6 +284,7 @@ public partial class LauncherWindow : GlassWindow
         if (e.NewValue is false)
         {
             StopPageSlide();
+            GlassSurface.RetireConcealedMaterial();
             _preparedForShow = false;
             AbortContainerTransform();
             CancelDrag();

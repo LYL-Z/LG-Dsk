@@ -11,6 +11,7 @@ internal sealed partial class AppHost
     private PerformanceFullscreenMonitor? _performanceFullscreen;
     private DispatcherTimer? _performanceDeadlineTimer;
     private DispatcherTimer? _fullscreenAppIslandTaskbarTimer;
+    private bool? _fullscreenAppIslandTaskbarAutoHidden;
     private DateTimeOffset? _launcherHiddenSince;
     private bool _applyingPerformance, _performanceApplyPending, _launcherPerformanceSleeping;
     private bool _libraryDirtyWhileSleeping;
@@ -175,17 +176,16 @@ internal sealed partial class AppHost
         var enabled = _data.Settings.Current.Performance.ShowFullscreenAppIsland;
         _dock.SetFullscreenAppIslandEnabled(enabled);
 
-        var pollTaskbarState = enabled && _performanceExternalFullscreenObserved;
         if (_fullscreenAppIslandTaskbarTimer is null)
         {
-            _fullscreenAppIslandTaskbarTimer = new DispatcherTimer(DispatcherPriority.Background, _application.Dispatcher)
+            _fullscreenAppIslandTaskbarTimer = new DispatcherTimer(DispatcherPriority.Input, _application.Dispatcher)
             {
-                Interval = TimeSpan.FromSeconds(1),
+                Interval = TimeSpan.FromMilliseconds(750),
             };
             _fullscreenAppIslandTaskbarTimer.Tick += (_, _) => UpdateFullscreenAppIslandContext();
         }
 
-        if (pollTaskbarState)
+        if (enabled)
         {
             if (!_fullscreenAppIslandTaskbarTimer.IsEnabled)
                 _fullscreenAppIslandTaskbarTimer.Start();
@@ -201,9 +201,13 @@ internal sealed partial class AppHost
     private void UpdateFullscreenAppIslandContext()
     {
         if (_dock is null || _data is null) return;
+        var taskbarAutoHidden = FullscreenDetector.IsTaskbarAutoHidden();
+        if (_fullscreenAppIslandTaskbarAutoHidden is { } previous && previous != taskbarAutoHidden)
+            _dock.RefreshDisplayPlacement();
+        _fullscreenAppIslandTaskbarAutoHidden = taskbarAutoHidden;
         var active = _data.Settings.Current.Performance.ShowFullscreenAppIsland
-            && _performanceExternalFullscreenObserved
-            && FullscreenDetector.IsTaskbarAutoHidden();
+            && taskbarAutoHidden
+            && ForegroundCoverage.IsExternalApplicationForeground();
         _dock.SetFullscreenAppIslandContext(active);
     }
 

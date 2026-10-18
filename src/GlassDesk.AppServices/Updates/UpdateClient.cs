@@ -1,4 +1,6 @@
 using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -10,6 +12,10 @@ public sealed partial class UpdateClient
 {
     public const long MaximumInstallerSize = 512L * 1024 * 1024;
     private const int MaximumMetadataSize = 512 * 1024;
+    private const int MaximumDownloadAttempts = 6;
+    private static readonly TimeSpan MetadataAttemptTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DownloadReadIdleTimeout = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan MaximumDownloadDuration = TimeSpan.FromMinutes(45);
     private readonly HttpClient _http;
     private readonly Uri _source;
 
@@ -23,23 +29,58 @@ public sealed partial class UpdateClient
 
     public async Task<UpdateRelease?> CheckAsync(Version current, CancellationToken token)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-        timeout.CancelAfter(TimeSpan.FromSeconds(20));
-        using var request = Request(_source, metadata: true);
-        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        if (response.Content.Headers.ContentLength > MaximumMetadataSize)
-            throw new InvalidDataException("更新信息过大。");
-        await using var input = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
-        using var output = new MemoryStream();
-        var buffer = new byte[16384];
-        int read;
-        while ((read = await input.ReadAsync(buffer, timeout.Token).ConfigureAwait(false)) != 0)
+        Exception? lastFailure = null;
+        for (var attempt = 1; attempt <= 3; attempt++)
         {
-            if (output.Length + read > MaximumMetadataSize) throw new InvalidDataException("更新信息过大。");
-            output.Write(buffer, 0, read);
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+                timeout.CancelAfter(MetadataAttemptTimeout);
+                using var request = Request(_source, metadata: true);
+                using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
+                if (IsTransientStatus(response.StatusCode))
+                {
+                    lastFailure = new HttpRequestException($"更新源暂时返回 HTTP {(int)response.StatusCode}。");
+                    if (attempt == 3) break;
+                    await Task.Delay(RetryDelay(attempt, response.Headers.RetryAfter), token).ConfigureAwait(false);
+                    continue;
+                }
+                response.EnsureSuccessStatusCode();
+                if (response.Content.Headers.ContentLength > MaximumMetadataSize)
+                    throw new InvalidDataException("更新信息过大。");
+                await using var input = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+                using var output = new MemoryStream();
+                var buffer = new byte[16384];
+                int read;
+                while ((read = await input.ReadAsync(buffer, timeout.Token).ConfigureAwait(false)) != 0)
+                {
+                    if (output.Length + read > MaximumMetadataSize) throw new InvalidDataException("更新信息过大。");
+                    output.Write(buffer, 0, read);
+                }
+                return ParseRelease(System.Text.Encoding.UTF8.GetString(output.ToArray()), current, _source);
+            }
+            catch (OperationCanceledException ex) when (!token.IsCancellationRequested)
+            {
+                lastFailure = ex;
+                if (attempt == 3) break;
+                await Task.Delay(RetryDelay(attempt, null), token).ConfigureAwait(false);
+            }
+            catch (HttpRequestException ex) when (IsTransientException(ex))
+            {
+                lastFailure = ex;
+                if (attempt == 3) break;
+                await Task.Delay(RetryDelay(attempt, null), token).ConfigureAwait(false);
+            }
+            catch (IOException ex)
+            {
+                lastFailure = ex;
+                if (attempt == 3) break;
+                await Task.Delay(RetryDelay(attempt, null), token).ConfigureAwait(false);
+            }
         }
-        return ParseRelease(System.Text.Encoding.UTF8.GetString(output.ToArray()), current, _source);
+        token.ThrowIfCancellationRequested();
+        throw new HttpRequestException("无法连接到 LG Dsk 发布源；网络恢复后可以重新检查。", lastFailure);
     }
 
     public static UpdateRelease? ParseRelease(string json, Version current, Uri source)
@@ -82,7 +123,8 @@ public sealed partial class UpdateClient
         }
     }
 
-    public async Task<string> DownloadAsync(UpdateRelease release, string cacheRoot, IProgress<int>? progress, CancellationToken token)
+    public async Task<string> DownloadAsync(UpdateRelease release, string cacheRoot,
+        IProgress<UpdateDownloadProgress>? progress, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(release);
         var repository = Repository(_source);
@@ -90,55 +132,239 @@ public sealed partial class UpdateClient
             && release.DownloadUrl.AbsoluteUri != $"https://github.com/{repository}/releases/download/{release.Version}/{release.FileName}")
             throw new InvalidDataException("更新下载地址无效。");
         ValidateInstaller(release);
-        var directory = Path.Combine(Path.GetFullPath(cacheRoot), Guid.NewGuid().ToString("N"));
+        // Reuse a product/version/digest-specific partial file so a user retry continues from
+        // the last verified byte. The SHA-256 is part of the directory identity and is checked
+        // again before the installer can be started.
+        var directory = Path.Combine(Path.GetFullPath(cacheRoot), $"LG-Dsk-{release.Version}-{release.Sha256[..12]}");
         Directory.CreateDirectory(directory);
         var partial = Path.Combine(directory, "installer.partial");
         var final = Path.Combine(directory, release.FileName);
         try
         {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-            timeout.CancelAfter(TimeSpan.FromMinutes(15));
-            using var request = Request(release.DownloadUrl, metadata: false);
-            using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
-            if (response.RequestMessage?.RequestUri is { Scheme: not "https" })
-                throw new InvalidDataException("更新下载被重定向到不安全的地址。");
-            if (response.Content.Headers.ContentLength is { } length && length != release.Size)
-                throw new InvalidDataException("安装包大小与更新信息不一致。");
-            await using var input = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
-            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            long received = 0;
-            var lastProgress = -1;
-            await using (var output = new FileStream(partial, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, useAsync: true))
+            if (File.Exists(final) && await VerifyFileAsync(final, release, token).ConfigureAwait(false))
             {
-                var buffer = new byte[65536];
-                progress?.Report(0);
-                int read;
-                while ((read = await input.ReadAsync(buffer, timeout.Token).ConfigureAwait(false)) != 0)
-                {
-                    received += read;
-                    if (received > release.Size) throw new InvalidDataException("安装包超出声明大小。");
-                    hash.AppendData(buffer, 0, read);
-                    await output.WriteAsync(buffer.AsMemory(0, read), timeout.Token).ConfigureAwait(false);
-                    var percent = (int)Math.Min(99, received * 100 / release.Size);
-                    if (percent != lastProgress) { progress?.Report(percent); lastProgress = percent; }
-                }
-                timeout.Token.ThrowIfCancellationRequested();
-                if (received != release.Size || !Convert.ToHexString(hash.GetHashAndReset()).Equals(release.Sha256, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException("安装包校验失败，请重试下载。");
-                await output.FlushAsync(timeout.Token).ConfigureAwait(false);
+                progress?.Report(new UpdateDownloadProgress(100, release.Size, release.Size, 1, false));
+                return final;
             }
-            timeout.Token.ThrowIfCancellationRequested();
-            File.Move(partial, final);
-            progress?.Report(100);
-            return final;
+            if (File.Exists(final)) File.Delete(final);
+
+            using var duration = CancellationTokenSource.CreateLinkedTokenSource(token);
+            duration.CancelAfter(MaximumDownloadDuration);
+            Exception? lastFailure = null;
+            var entityTag = (string?)null;
+            var lastPercent = -1;
+            var lastProgressAt = DateTimeOffset.MinValue;
+            var restartedForMismatch = false;
+            for (var attempt = 1; attempt <= MaximumDownloadAttempts; attempt++)
+            {
+                duration.Token.ThrowIfCancellationRequested();
+                var offset = File.Exists(partial) ? new FileInfo(partial).Length : 0;
+                if (offset > release.Size)
+                {
+                    File.Delete(partial);
+                    offset = 0;
+                }
+                if (offset == release.Size)
+                {
+                    if (await VerifyFileAsync(partial, release, duration.Token).ConfigureAwait(false))
+                    {
+                        File.Move(partial, final, overwrite: true);
+                        progress?.Report(new UpdateDownloadProgress(100, release.Size, release.Size, attempt, true));
+                        return final;
+                    }
+                    if (restartedForMismatch) throw new InvalidDataException("断点续传内容未通过 SHA-256 校验，请删除临时更新文件后重试。");
+                    File.Delete(partial);
+                    restartedForMismatch = true;
+                    offset = 0;
+                }
+
+                try
+                {
+                    using var request = Request(release.DownloadUrl, metadata: false);
+                    if (offset > 0)
+                    {
+                        request.Headers.Range = new RangeHeaderValue(offset, null);
+                        if (EntityTagHeaderValue.TryParse(entityTag, out var tag) && !tag.IsWeak)
+                            request.Headers.IfRange = new RangeConditionHeaderValue(tag);
+                    }
+
+                    using var headersTimeout = CancellationTokenSource.CreateLinkedTokenSource(duration.Token);
+                    headersTimeout.CancelAfter(TimeSpan.FromSeconds(60));
+                    using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, headersTimeout.Token).ConfigureAwait(false);
+                    if (IsTransientStatus(response.StatusCode))
+                    {
+                        lastFailure = new HttpRequestException($"更新文件服务器暂时返回 HTTP {(int)response.StatusCode}。");
+                        if (attempt == MaximumDownloadAttempts) break;
+                        progress?.Report(new UpdateDownloadProgress(Percent(offset, release.Size), offset, release.Size, attempt + 1, offset > 0));
+                        await Task.Delay(RetryDelay(attempt, response.Headers.RetryAfter), duration.Token).ConfigureAwait(false);
+                        continue;
+                    }
+                    if (response.RequestMessage?.RequestUri is { Scheme: not "https" })
+                        throw new InvalidDataException("更新下载被重定向到不安全的地址。");
+
+                    if (offset > 0 && response.StatusCode == HttpStatusCode.OK)
+                    {
+                        // A CDN/proxy may ignore Range. Its 200 body starts at byte zero, so
+                        // replace the partial instead of appending a duplicate response.
+                        offset = 0;
+                    }
+                    else if (offset > 0)
+                    {
+                        if (response.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable)
+                        {
+                            File.Delete(partial);
+                            entityTag = null;
+                            continue;
+                        }
+                        var range = response.Content.Headers.ContentRange;
+                        if (response.StatusCode != HttpStatusCode.PartialContent || range?.From != offset
+                            || range.Length != release.Size || !string.Equals(range.Unit, "bytes", StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidDataException("更新服务器返回的续传范围与本地进度不一致。");
+                    }
+                    else if (response.StatusCode != HttpStatusCode.OK)
+                    {
+                        response.EnsureSuccessStatusCode();
+                        throw new InvalidDataException("更新服务器没有返回完整安装包。");
+                    }
+
+                    var responseTag = response.Headers.ETag?.ToString();
+                    if (offset > 0 && entityTag is not null && responseTag is not null
+                        && !string.Equals(entityTag, responseTag, StringComparison.Ordinal))
+                    {
+                        File.Delete(partial);
+                        entityTag = responseTag;
+                        continue;
+                    }
+                    entityTag ??= responseTag;
+                    var remaining = release.Size - offset;
+                    if (response.Content.Headers.ContentLength is { } length && length != remaining)
+                        throw new InvalidDataException("安装包大小与更新信息不一致。");
+
+                    await using var input = await response.Content.ReadAsStreamAsync(duration.Token).ConfigureAwait(false);
+                    var mode = offset == 0 ? FileMode.Create : FileMode.Open;
+                    await using var output = new FileStream(partial, mode, FileAccess.Write, FileShare.Read,
+                        131072, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                    if (offset > 0) output.Position = offset;
+                    var received = offset;
+                    var buffer = new byte[131072];
+                    progress?.Report(new UpdateDownloadProgress(Percent(received, release.Size), received, release.Size, attempt, offset > 0));
+                    int read;
+                    while (true)
+                    {
+                        using var readTimeout = CancellationTokenSource.CreateLinkedTokenSource(duration.Token);
+                        readTimeout.CancelAfter(DownloadReadIdleTimeout);
+                        try
+                        {
+                            read = await input.ReadAsync(buffer, readTimeout.Token).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException ex) when (!duration.IsCancellationRequested && !token.IsCancellationRequested)
+                        {
+                            throw new IOException("下载连接长时间没有传输数据。", ex);
+                        }
+                        if (read == 0) break;
+                        received += read;
+                        if (received > release.Size) throw new InvalidDataException("安装包超出声明大小。");
+                        await output.WriteAsync(buffer.AsMemory(0, read), duration.Token).ConfigureAwait(false);
+                        var percent = Percent(received, release.Size);
+                        var now = DateTimeOffset.UtcNow;
+                        if (percent != lastPercent || now - lastProgressAt >= TimeSpan.FromSeconds(1))
+                        {
+                            progress?.Report(new UpdateDownloadProgress(percent, received, release.Size, attempt, offset > 0));
+                            lastPercent = percent;
+                            lastProgressAt = now;
+                        }
+                    }
+                    await output.FlushAsync(duration.Token).ConfigureAwait(false);
+                    if (received != release.Size)
+                        throw new IOException("远程主机提前关闭了连接；已保留已下载部分，正在尝试断点续传。");
+
+                    if (!await VerifyFileAsync(partial, release, duration.Token).ConfigureAwait(false))
+                    {
+                        if (restartedForMismatch)
+                        {
+                            File.Delete(partial);
+                            throw new InvalidDataException("安装包 SHA-256 校验失败，请重新检查更新源。");
+                        }
+                        File.Delete(partial);
+                        entityTag = null;
+                        restartedForMismatch = true;
+                        continue;
+                    }
+
+                    duration.Token.ThrowIfCancellationRequested();
+                    File.Move(partial, final, overwrite: true);
+                    progress?.Report(new UpdateDownloadProgress(100, release.Size, release.Size, attempt, offset > 0));
+                    return final;
+                }
+                catch (InvalidDataException)
+                {
+                    // Preserve partial bytes only for transport interruptions. Invalid content,
+                    // malformed ranges and oversized responses must never be resumed later.
+                    if (File.Exists(partial)) File.Delete(partial);
+                    throw;
+                }
+                catch (OperationCanceledException ex) when (!token.IsCancellationRequested && !duration.IsCancellationRequested)
+                {
+                    lastFailure = ex;
+                }
+                catch (HttpRequestException ex) when (IsTransientException(ex)) { lastFailure = ex; }
+                catch (IOException ex) { lastFailure = ex; }
+
+                if (attempt == MaximumDownloadAttempts) break;
+                var retainedBytes = File.Exists(partial) ? new FileInfo(partial).Length : 0;
+                progress?.Report(new UpdateDownloadProgress(Percent(retainedBytes, release.Size), retainedBytes,
+                    release.Size, attempt + 1, retainedBytes > 0));
+                await Task.Delay(RetryDelay(attempt, null), duration.Token).ConfigureAwait(false);
+            }
+
+            duration.Token.ThrowIfCancellationRequested();
+            throw new IOException("更新文件多次中断。已保留已下载部分；请检查网络后重试，程序会从断点继续。", lastFailure);
         }
-        catch
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (InvalidDataException)
         {
-            try { Directory.Delete(directory, recursive: true); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            // The version/digest directory is owned by this download and may contain only
+            // its partial installer. Remove it after any integrity or protocol violation.
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
             throw;
         }
+        catch (OperationCanceledException ex)
+        {
+            throw new IOException("更新下载超过最长时限；已保留下载进度，稍后重试即可续传。", ex);
+        }
+    }
+
+    private static int Percent(long received, long total) =>
+        total <= 0 ? 0 : (int)Math.Clamp(received * 100 / total, 0, 99);
+
+    private static async Task<bool> VerifyFileAsync(string path, UpdateRelease release, CancellationToken token)
+    {
+        var info = new FileInfo(path);
+        if (!info.Exists || info.Length != release.Size) return false;
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            131072, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var digest = await SHA256.HashDataAsync(stream, token).ConfigureAwait(false);
+        return Convert.ToHexString(digest).Equals(release.Sha256, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsTransientStatus(HttpStatusCode status) =>
+        status is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests
+        || (int)status >= 500;
+
+    private static bool IsTransientException(HttpRequestException exception) =>
+        exception.StatusCode is null || IsTransientStatus(exception.StatusCode.Value);
+
+    private static TimeSpan RetryDelay(int attempt, RetryConditionHeaderValue? retryAfter)
+    {
+        if (retryAfter?.Delta is { } delta && delta >= TimeSpan.Zero)
+            return delta > TimeSpan.FromSeconds(30) ? TimeSpan.FromSeconds(30) : delta;
+        if (retryAfter?.Date is { } date)
+        {
+            var delay = date - DateTimeOffset.UtcNow;
+            return delay <= TimeSpan.Zero ? TimeSpan.Zero : delay > TimeSpan.FromSeconds(30) ? TimeSpan.FromSeconds(30) : delay;
+        }
+        var baseMilliseconds = Math.Min(8000, 350 * (1 << Math.Min(attempt - 1, 4)));
+        return TimeSpan.FromMilliseconds(baseMilliseconds + Random.Shared.Next(0, 251));
     }
 
     internal static void ValidateInstaller(UpdateRelease release)

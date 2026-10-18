@@ -128,30 +128,17 @@ internal sealed partial class AppHost
         _updateWindow.Activate();
     }
 
-    private async Task InstallUpdateAsync(UpdateClient client, UpdateRelease release, IProgress<int> progress, CancellationToken token)
+    private async Task InstallUpdateAsync(UpdateClient client, UpdateRelease release, IProgress<UpdateDownloadProgress> progress, CancellationToken token)
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, _updateLifetime.Token);
         var cache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LG Dsk", "Updates");
         var file = await client.DownloadAsync(release, cache, progress, cancellation.Token);
-        var launched = false;
-        try
-        {
-            var installation = new InstallationLocator().Inspect(Environment.ProcessPath ?? string.Empty);
-            var start = await UpdateInstaller.PrepareAsync(release, file, installation, cancellation.Token);
-            cancellation.Token.ThrowIfCancellationRequested();
-            using var process = Process.Start(start) ?? throw new InvalidOperationException("安装程序未能启动。");
-            launched = true;
-            _updateWindow?.MarkInstalling();
-            ExitApplication();
-        }
-        finally
-        {
-            if (!launched)
-            {
-                try { Directory.Delete(Path.GetDirectoryName(file)!, recursive: true); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-            }
-        }
+        var installation = new InstallationLocator().Inspect(Environment.ProcessPath ?? string.Empty);
+        var start = await UpdateInstaller.PrepareAsync(release, file, installation, cancellation.Token);
+        cancellation.Token.ThrowIfCancellationRequested();
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("安装程序未能启动。");
+        _updateWindow?.MarkInstalling();
+        ExitApplication();
     }
 
     private void DisposeUpdates()

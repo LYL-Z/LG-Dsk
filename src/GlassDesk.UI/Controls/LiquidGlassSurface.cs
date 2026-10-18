@@ -95,6 +95,8 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
     public bool UseLaunchpadOptics { get; set; }
     /// <summary>Selects launcher transparency independently of the shared optical material.</summary>
     public bool UseLauncherTransparency { get; set; }
+    /// <summary>Uses Claude-inspired warm paper for first-frame/basic-rendering fallbacks.</summary>
+    public bool UseWarmSafeFallback { get; set; }
     private double BackgroundClarity => AndroidLiquidGlassRenderer.NormalizeBackgroundClarity(
         UseLauncherTransparency
             ? ThemeService.Current?.Appearance.LauncherGlassTransparency ?? AppearanceSettings.DefaultLauncherGlassTransparency
@@ -395,6 +397,7 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         var debugView = LiquidGlassDebugState.View;
         var material = ThemeService.Current?.Appearance.GlassMaterial ?? GlassMaterialMode.AndroidLiquidGlass;
         var dark = ThemeService.Current?.IsDark != false;
+        var fallbackDark = !UseWarmSafeFallback && dark;
         var backgroundClarity = BackgroundClarity;
         var useAndroidGlass = (material is GlassMaterialMode.AndroidLiquidGlass or GlassMaterialMode.FrostedGlass)
             && debugView == LiquidGlassDebugView.None;
@@ -653,6 +656,7 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         _lastRenderTicks = Stopwatch.GetTimestamp(); ++_renderCount;
         var debugView = LiquidGlassDebugState.View;
         var dark = ThemeService.Current?.IsDark != false;
+        var fallbackDark = !UseWarmSafeFallback && dark;
         var compatibleChrome = debugView == LiquidGlassDebugView.None && (_frameUsesAndroidGlass
             || _frame is null && (ThemeService.Current?.Appearance.GlassMaterial ?? GlassMaterialMode.AndroidLiquidGlass)
                 is GlassMaterialMode.AndroidLiquidGlass or GlassMaterialMode.FrostedGlass);
@@ -699,8 +703,11 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         dc.PushClip(CreatePanel(rect, radius));
         if (ThemeService.Current?.UseOpaquePanels == true || BackdropRecovery.RequiresBasicRendering)
         {
-            dc.DrawRectangle(new SolidColorBrush(dark ? Color.FromRgb(28, 29, 34) : Color.FromRgb(246, 247, 250)), null, rect);
-            if (_background.RequiresBasicBackground) DrawCompatibilityNotice(dc, rect, "基础背景 · 正在恢复实时效果", dark);
+            var basicFill = UseWarmSafeFallback
+                ? new SolidColorBrush(Color.FromRgb(0xFA, 0xF6, 0xEE))
+                : new SolidColorBrush(dark ? Color.FromRgb(28, 29, 34) : Color.FromRgb(246, 247, 250));
+            dc.DrawRectangle(basicFill, null, rect);
+            if (_background.RequiresBasicBackground) DrawCompatibilityNotice(dc, rect, "基础背景 · 正在恢复实时效果", fallbackDark);
             dc.Pop(); return;
         }
         if (hasSafeRevealFallback)
@@ -708,8 +715,8 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
             // A nearly transparent first frame on a layered HWND can be presented as black
             // while DWM attaches the live desktop material. Use a complete warm fallback
             // until a fresh capture arrives; never retain an old desktop image to hide it.
-            var top = dark ? Color.FromRgb(0x3B, 0x35, 0x31) : Color.FromRgb(0xFA, 0xF6, 0xEE);
-            var bottom = dark ? Color.FromRgb(0x2C, 0x28, 0x25) : Color.FromRgb(0xF0, 0xE8, 0xDC);
+            var top = fallbackDark ? Color.FromRgb(0x3B, 0x35, 0x31) : Color.FromRgb(0xFA, 0xF6, 0xEE);
+            var bottom = fallbackDark ? Color.FromRgb(0x2C, 0x28, 0x25) : Color.FromRgb(0xF0, 0xE8, 0xDC);
             var fallback = new LinearGradientBrush(top, bottom, 90);
             fallback.Freeze();
             dc.DrawRectangle(fallback, null, rect);

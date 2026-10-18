@@ -40,6 +40,9 @@ internal static partial class Shell32
     /// <summary>任务栏状态查询（<c>SHAppBarMessage</c> 的消息之一）。</summary>
     internal const uint AbmGetState = 0x00000004;
 
+    /// <summary>查询系统任务栏矩形（<c>SHAppBarMessage</c> 的消息之一）。</summary>
+    internal const uint AbmGetTaskbarPos = 0x00000005;
+
     /// <summary>任务栏处于自动隐藏。返回值里的这一位决定了「铺满整屏」与「最大化」是否可区分。</summary>
     internal const uint AbsAutoHide = 0x00000001;
 

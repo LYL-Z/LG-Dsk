@@ -68,7 +68,7 @@
           SnapsToDevicePixels="True">
     <Grid>
     <!-- Background is sampled offscreen; Glass is painted before native Content. -->
-    <controls:LiquidGlassSurface x:Name="GlassSurface" UseLauncherTransparency="True" />
+    <controls:LiquidGlassSurface x:Name="GlassSurface" UseLauncherTransparency="True" UseWarmSafeFallback="True" />
     <Grid x:Name="LauncherPanelRoot" HorizontalAlignment="Left" VerticalAlignment="Top">
     <Grid x:Name="LauncherContent" Margin="40,28,40,24" RenderTransformOrigin=".5,.5">
       <Grid.RenderTransform>

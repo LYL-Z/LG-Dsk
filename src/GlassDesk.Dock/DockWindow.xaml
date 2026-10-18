@@ -42,7 +42,7 @@
 
     <Grid ClipToBounds="True">
       <!-- Glass remains in screen coordinates; the live shared silhouette slides over it. -->
-      <controls:LiquidGlassSurface x:Name="GlassSurface" />
+    <controls:LiquidGlassSurface x:Name="GlassSurface" UseWarmSafeFallback="True" />
       <Grid x:Name="DockVisualRoot" ClipToBounds="True" RenderTransformOrigin="0,0">
         <Grid.RenderTransform>
           <TranslateTransform x:Name="DockSlideTransform" />
@@ -113,7 +113,8 @@
         </StackPanel>
 
         <Border x:Name="SwitcherContentLayer" Margin="10,8" Visibility="Collapsed"
-                Background="Transparent" IsHitTestVisible="True" Panel.ZIndex="1">
+                Background="Transparent" IsHitTestVisible="True" Panel.ZIndex="1"
+                MouseEnter="OnSwitcherHoverEnter" MouseLeave="OnSwitcherHoverLeave">
           <StackPanel>
             <DockPanel Margin="8,0,8,5" LastChildFill="True">
               <Button x:Name="CloseSwitcherButton" DockPanel.Dock="Right" Width="26" Height="24"
@@ -178,8 +179,9 @@
                 Background="Transparent" IsHitTestVisible="True" Panel.ZIndex="2">
           <Button x:Name="AppIslandButton" MinWidth="164" Height="42" Padding="12,5"
                   Background="Transparent" BorderThickness="0" Focusable="False"
-                  ToolTip="点击查看窗口与后台应用；鼠标经过不会展开"
+                  ToolTip="鼠标经过展开应用岛；显示固定应用、窗口、后台和可读取的托盘项目"
                   AutomationProperties.Name="展开 LG Dsk 应用岛"
+                  MouseEnter="OnAppIslandMouseEnter"
                   Click="OnAppIslandClick">
             <Border CornerRadius="18" Background="#33201B18" Padding="6,3">
               <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center">

@@ -392,6 +392,27 @@ public static class FullscreenDetector
         }
     }
 
+    /// <summary>读取 Windows 报告的任务栏外接矩形（物理像素）；查询失败时返回 null。</summary>
+    public static PixelRect? GetTaskbarBounds()
+    {
+        try
+        {
+            var data = new Shell32.AppBarData
+            {
+                Size = (uint)Marshal.SizeOf<Shell32.AppBarData>(),
+            };
+            if (Shell32.SHAppBarMessage(Shell32.AbmGetTaskbarPos, ref data) == 0) return null;
+            var rect = data.Rectangle;
+            var width = rect.Right - rect.Left;
+            var height = rect.Bottom - rect.Top;
+            return width > 0 && height > 0 ? new PixelRect(rect.Left, rect.Top, width, height) : null;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>路径一的完整形态：判定 + 解释 + 几何数据。</summary>
     private static (FullscreenVerdict Verdict, string Reason, WindowGeometry Geometry) EvaluateWindowPath(nint handle, FullscreenOptions options)
     {
