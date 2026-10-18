@@ -1,18 +1,25 @@
 using System.IO;
 using System.Diagnostics;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using Microsoft.Win32;
 using GlassDesk.AppServices;
 using GlassDesk.Core.Contracts;
 using GlassDesk.Core.Models;
 using GlassDesk.Core.Models.Settings;
+using GlassDesk.Core.Models.Island;
 using GlassDesk.Core.Storage;
 using GlassDesk.Platform;
+using GlassDesk.Platform.Audio;
 using GlassDesk.Platform.Displays;
+using GlassDesk.Platform.Power;
 using GlassDesk.Platform.Shell;
 using GlassDesk.UI.Controls;
 using GlassDesk.UI.Settings;
@@ -49,16 +56,24 @@ public partial class DockWindow : GlassWindow
     private readonly DockTileStrip _tileStrip;
 
     private readonly List<DockTileModel> _models = [];
-    private readonly ObservableCollection<RunningAppTile> _switcherItems = [];
+    private readonly ObservableRangeCollection<RunningAppTile> _switcherItems = [];
+    private readonly IslandTimerCoordinator _islandTimers = new();
     private readonly Dictionary<string, BitmapSource?> _switcherIconCache = new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<RunningBackgroundAppItem> _backgroundAppItems = [];
     private IReadOnlyList<NotificationAreaAppItem> _trayAppItems = [];
     private System.Windows.Threading.DispatcherTimer? _appIslandHoverCollapseTimer;
-    private bool _appIslandHoverExpanded;
+    private readonly AppIslandStateMachine _appIslandStateMachine = new();
     private DockPresentationMode _presentationMode = DockPresentationMode.DesktopDock;
     private double _cachedDockContentWidthDip;
     private long _switcherInventoryGeneration;
     private bool _switcherInventoryRefreshInProgress;
+    private bool _switcherInventoryRefreshPending;
+    private System.Windows.Threading.DispatcherTimer? _islandPowerRefreshTimer;
+    private System.Windows.Threading.DispatcherTimer? _islandActivityTimer;
+    private System.Windows.Threading.DispatcherTimer? _islandTimerTickTimer;
+    private readonly IslandActivityCoordinator _islandActivities = new();
+    private CoreAudioEndpointMonitor? _audioEndpointMonitor;
+    private bool _powerModeNotificationSubscribed;
     private bool _fullscreenAppIslandEnabled = true;
     private bool _fullscreenAppIslandContext;
 
@@ -80,6 +95,7 @@ public partial class DockWindow : GlassWindow
     public void SetLauncherContainerState(bool expanded)
     {
         _launcherContainerActive = expanded;
+        UpdateAppIslandContext();
         if (expanded && !_performanceSleepRequested && _restingRect.Width > 0)
         {
             _autoHide?.ForceShown(DateTime.UtcNow);
@@ -94,18 +110,20 @@ public partial class DockWindow : GlassWindow
         if (_settingsWindowVisible == visible) return;
         _settingsWindowVisible = visible;
         if (visible) SetRunningAppSwitcherRequested(false);
+        UpdateAppIslandContext();
         OnAutoHideFrame();
     }
 
     public bool IsRunningAppSwitcherRequested => _switcherRequested;
     public bool IsAppAwarenessSurfaceRequested => !_settingsWindowVisible
-        && (_switcherRequested || _fullscreenAppIslandEnabled && _fullscreenAppIslandContext);
+        && (_switcherRequested || _appIslandStateMachine.IsVisible);
     public event EventHandler? RunningAppSwitcherVisibilityChanged;
 
     public void SetFullscreenAppIslandEnabled(bool enabled)
     {
         if (_fullscreenAppIslandEnabled == enabled) return;
         _fullscreenAppIslandEnabled = enabled;
+        UpdateAppIslandContext();
         RunningAppSwitcherVisibilityChanged?.Invoke(this, EventArgs.Empty);
         OnAutoHideFrame();
     }
@@ -115,6 +133,7 @@ public partial class DockWindow : GlassWindow
     {
         if (_fullscreenAppIslandContext == active) return;
         _fullscreenAppIslandContext = active;
+        UpdateAppIslandContext();
         RunningAppSwitcherVisibilityChanged?.Invoke(this, EventArgs.Empty);
         OnAutoHideFrame();
     }
@@ -149,6 +168,13 @@ public partial class DockWindow : GlassWindow
         InitializeEntryHover();
         RunningAppsItems.ItemsSource = _switcherItems;
         PanelCornerRadius = new CornerRadius(40);
+        _islandPowerRefreshTimer = new System.Windows.Threading.DispatcherTimer(
+            System.Windows.Threading.DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromSeconds(20),
+        };
+        _islandPowerRefreshTimer.Tick += (_, _) => RefreshIslandPowerStatus();
+        RefreshIslandPowerStatus();
         GlassSurface.IsBackdropActive = () => IsOpticalSurfaceVisible;
 
         _tileStrip = new DockTileStrip();
@@ -622,6 +648,13 @@ public partial class DockWindow : GlassWindow
         {
             SizeToContent = System.Windows.SizeToContent.Height;
             var maxWidth = display is null ? 900 : Math.Max(180, display.ToDips((int)display.WorkArea.Width) - 32);
+            if (_appIslandStateMachine.IsExpanded && !_switcherRequested)
+            {
+                var islandWidth = Math.Min(440, maxWidth);
+                Width = Math.Max(Math.Min(320, maxWidth), islandWidth);
+                SwitcherContentLayer.Width = Math.Max(1, Width - 20);
+                return;
+            }
             var minimum = Math.Min(360, maxWidth);
             var switcherWidthRequested = Settings.FrameLengthDip > 0
                 ? ResolveEffectiveFrameLengthDip(Settings.FrameLengthDip, display)
@@ -1509,24 +1542,25 @@ public partial class DockWindow : GlassWindow
         var externalForeground = DockPresentationPolicy.EffectiveExternalForeground(
             ForegroundCoverage.IsExternalApplicationForeground(), _settingsWindowVisible);
         var hasSwitcherContent = _switcherItems.Count > 0;
-        if (!externalForeground && !_settingsWindowVisible)
-        {
-            _appIslandHoverExpanded = false;
-            _appIslandHoverCollapseTimer?.Stop();
-            SetRunningAppSwitcherRequested(false);
-        }
         var appIslandRequested = _fullscreenAppIslandEnabled && _fullscreenAppIslandContext
             && externalForeground && !_settingsWindowVisible && !_launcherContainerActive;
+        _appIslandStateMachine.SetContextAvailable(appIslandRequested);
+        if (!_appIslandStateMachine.IsExpanded) _appIslandHoverCollapseTimer?.Stop();
+        if (!externalForeground && !_settingsWindowVisible)
+        {
+            SetRunningAppSwitcherRequested(false);
+        }
         var mode = DockPresentationPolicy.Resolve(
             _launcherContainerActive,
             ForegroundCoverage.IsExternalApplicationForeground(),
             fullscreen,
             hasSwitcherContent,
-            _switcherRequested || _appIslandHoverExpanded,
+            _switcherRequested || _appIslandStateMachine.IsExpanded,
             _settingsWindowVisible,
             appIslandRequested);
         ApplyPresentationMode(mode);
         UpdateSwitcherInventoryTimer(mode is DockPresentationMode.RunningAppIsland or DockPresentationMode.RunningAppSwitcher);
+        UpdateIslandPowerRefreshTimer(mode is DockPresentationMode.RunningAppIsland or DockPresentationMode.RunningAppSwitcher);
         UpdateAutoHideState(now, fullscreen, externalForeground, mode);
 
         // 滑动插值：向目标滑出量靠近。
@@ -1616,13 +1650,210 @@ public partial class DockWindow : GlassWindow
         DockContentLayer.IsHitTestVisible = showDock;
         PanelCornerRadius = new CornerRadius(showIsland ? 24 : 40 * DockScale);
         ApplyFrameLength();
+        if (showSwitcher || showIsland) RefreshIslandPowerStatus();
 
         if (IsLoaded)
             Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(PositionOnDisplay));
 
         var isAwarenessVisible = showSwitcher || showIsland;
+        UpdateIslandPowerRefreshTimer(isAwarenessVisible);
         if (wasAwarenessVisible != isAwarenessVisible)
             RunningAppSwitcherVisibilityChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void UpdateAppIslandContext()
+    {
+        var available = _fullscreenAppIslandEnabled && _fullscreenAppIslandContext
+            && !_settingsWindowVisible && !_launcherContainerActive && !_performanceSleepRequested;
+        _appIslandStateMachine.SetContextAvailable(available);
+        if (!_appIslandStateMachine.IsExpanded) _appIslandHoverCollapseTimer?.Stop();
+    }
+
+    private void UpdateIslandPowerRefreshTimer(bool active)
+    {
+        if (_islandPowerRefreshTimer is null) return;
+        if (active && !_islandPowerRefreshTimer.IsEnabled)
+        {
+            RefreshIslandPowerStatus();
+            _islandPowerRefreshTimer.Start();
+        }
+        else if (!active)
+        {
+            _islandPowerRefreshTimer.Stop();
+        }
+    }
+
+    private void RefreshIslandPowerStatus()
+    {
+        var label = SystemPowerStatusReader.Read().ToIslandLabel();
+        if (AppIslandPowerText is not null) AppIslandPowerText.Text = label;
+        if (SwitcherPowerText is not null) SwitcherPowerText.Text = label;
+    }
+
+    private void OnEndpointVolumeChanged(EndpointVolumeSnapshot snapshot)
+    {
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
+        _ = Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
+            new Action(() => ApplyEndpointVolume(snapshot)));
+    }
+
+    private void ApplyEndpointVolume(EndpointVolumeSnapshot snapshot)
+    {
+        if (snapshot.IsAvailable)
+        {
+            _islandActivities.PublishTransient("system-volume", snapshot.ToIslandLabel(),
+                priority: 50, TimeSpan.FromSeconds(2.4));
+        }
+        else
+        {
+            _islandActivities.Remove("system-volume");
+        }
+
+        RefreshIslandActivityText();
+    }
+
+    private void RefreshIslandActivityText()
+    {
+        var activity = _islandActivities.ReadCurrent();
+        var text = activity?.Text ?? string.Empty;
+        if (SwitcherActivityText is not null)
+        {
+            SwitcherActivityText.Text = text;
+            SwitcherActivityText.Visibility = activity is null ? Visibility.Collapsed : Visibility.Visible;
+        }
+        if (AppIslandActivityText is not null)
+        {
+            AppIslandActivityText.Text = text;
+            AppIslandActivityText.Visibility = activity is null ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        _islandActivityTimer ??= new System.Windows.Threading.DispatcherTimer(
+            System.Windows.Threading.DispatcherPriority.Background, Dispatcher);
+        _islandActivityTimer.Stop();
+        if (_islandActivities.TimeUntilNextExpiration() is { } remaining)
+        {
+            _islandActivityTimer.Interval = remaining < TimeSpan.FromMilliseconds(100)
+                ? TimeSpan.FromMilliseconds(100)
+                : remaining;
+            _islandActivityTimer.Tick -= OnIslandActivityTimerTick;
+            _islandActivityTimer.Tick += OnIslandActivityTimerTick;
+            _islandActivityTimer.Start();
+        }
+    }
+
+    private void OnIslandActivityTimerTick(object? sender, EventArgs e)
+    {
+        _islandActivityTimer?.Stop();
+        RefreshIslandActivityText();
+    }
+
+    private void OnIslandTimerPresetClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string minutesText }
+            || !int.TryParse(minutesText, out var minutes)
+            || minutes is not (5 or 15 or 25 or 45)) return;
+
+        try
+        {
+            _islandTimers.Start($"倒计时 {minutes} 分钟", TimeSpan.FromMinutes(minutes));
+            RefreshIslandTimerState();
+        }
+        catch (InvalidOperationException ex)
+        {
+            ShowFailureNotice(ex.Message);
+        }
+    }
+
+    private void OnIslandTimerPauseClick(object sender, RoutedEventArgs e)
+    {
+        _islandTimers.PauseAll();
+        RefreshIslandTimerState();
+    }
+
+    private void OnIslandTimerResumeClick(object sender, RoutedEventArgs e)
+    {
+        _islandTimers.ResumeAll();
+        RefreshIslandTimerState();
+    }
+
+    private void OnIslandTimerClearClick(object sender, RoutedEventArgs e)
+    {
+        _islandTimers.CancelAll();
+        RefreshIslandTimerState();
+    }
+
+    private void OnIslandTimerTick(object? sender, EventArgs e)
+    {
+        _islandTimerTickTimer?.Stop();
+        var completed = _islandTimers.CollectCompleted();
+        if (completed.Count > 0)
+        {
+            var names = string.Join("、", completed.Select(timer => timer.Name));
+            _islandActivities.PublishTransient("timer-completion", $"计时结束 · {names}",
+                priority: 100, TimeSpan.FromSeconds(6));
+        }
+
+        RefreshIslandTimerState();
+    }
+
+    private void RefreshIslandTimerState()
+    {
+        var timers = _islandTimers.ReadAll();
+        if (SwitcherTimerStatusText is not null)
+        {
+            SwitcherTimerStatusText.Text = timers.Count == 0
+                ? "快捷倒计时（仅本次运行期间有效） · 暂无计时器"
+                : string.Join("  ·  ", timers.Select(timer =>
+                    $"{timer.Name} {FormatTimerRemaining(timer.Remaining)}{(timer.IsRunning ? string.Empty : "（已暂停）")}"));
+        }
+
+        if (timers.Count == 0)
+        {
+            _islandActivities.RemovePersistent("island-timer");
+        }
+        else
+        {
+            var first = timers[0];
+            var pausedPrefix = timers.All(timer => !timer.IsRunning) ? "已暂停 · " : string.Empty;
+            var title = timers.Count == 1
+                ? $"{pausedPrefix}计时器 · {first.Name} {FormatTimerRemaining(first.Remaining)}"
+                : $"{pausedPrefix}计时器 · {first.Name} {FormatTimerRemaining(first.Remaining)} +{timers.Count - 1}";
+            _islandActivities.SetPersistent("island-timer", title, priority: 30);
+        }
+
+        var hasRunningTimer = timers.Any(timer => timer.IsRunning);
+        if (hasRunningTimer)
+        {
+            _islandTimerTickTimer ??= new System.Windows.Threading.DispatcherTimer(
+                System.Windows.Threading.DispatcherPriority.Background, Dispatcher)
+            {
+                Interval = TimeSpan.FromSeconds(1),
+            };
+            _islandTimerTickTimer.Tick -= OnIslandTimerTick;
+            _islandTimerTickTimer.Tick += OnIslandTimerTick;
+            if (!_islandTimerTickTimer.IsEnabled) _islandTimerTickTimer.Start();
+        }
+        else
+        {
+            _islandTimerTickTimer?.Stop();
+        }
+
+        RefreshIslandActivityText();
+    }
+
+    private static string FormatTimerRemaining(TimeSpan remaining)
+    {
+        var seconds = Math.Max(0, (long)Math.Ceiling(remaining.TotalSeconds));
+        var value = TimeSpan.FromSeconds(seconds);
+        return value.TotalDays >= 1
+            ? $"{(int)value.TotalDays}.{value:hh\\:mm\\:ss}"
+            : value.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
+    }
+
+    private void OnIslandPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
+    {
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
+        _ = Dispatcher.BeginInvoke(new Action(RefreshIslandPowerStatus));
     }
 
     private void UpdateSwitcherInventoryTimer(bool active)
@@ -1653,7 +1884,13 @@ public partial class DockWindow : GlassWindow
 
     private async Task RefreshSwitcherInventoryAsync()
     {
-        if (_services is null || _switcherInventoryRefreshInProgress
+        if (_switcherInventoryRefreshInProgress)
+        {
+            _switcherInventoryRefreshPending = true;
+            return;
+        }
+
+        if (_services is null
             || _presentationMode is not (DockPresentationMode.RunningAppSwitcher or DockPresentationMode.RunningAppIsland))
             return;
 
@@ -1692,13 +1929,22 @@ public partial class DockWindow : GlassWindow
             _trayAppItems = inventory.tray;
             RefreshSwitcherItems();
         }
-        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException
+            or COMException or Win32Exception or TimeoutException)
         {
-            // A transient process/window enumeration failure must not close the app island.
+            // Keep the last complete snapshot. A transient UIA/Win32 failure must not
+            // publish a half-built list or escape the background refresh task.
         }
         finally
         {
             _switcherInventoryRefreshInProgress = false;
+            if (_switcherInventoryRefreshPending
+                && _presentationMode is DockPresentationMode.RunningAppSwitcher or DockPresentationMode.RunningAppIsland
+                && !Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
+            {
+                _switcherInventoryRefreshPending = false;
+                _ = Dispatcher.BeginInvoke(new Action(() => _ = RefreshSwitcherInventoryAsync()));
+            }
         }
     }
 
@@ -1706,12 +1952,12 @@ public partial class DockWindow : GlassWindow
     {
         if (_services is null) return;
         var items = RunningWindowSwitcherItems.Create(_services.Running.LastWindows, (uint)Environment.ProcessId);
-        _switcherItems.Clear();
+        var refreshedItems = new List<RunningAppTile>();
         foreach (var item in items)
         {
             var displayName = GetSwitcherDisplayName(item);
             var glyph = displayName.Length == 0 ? "·" : displayName[..1].ToUpperInvariant();
-            _switcherItems.Add(new RunningAppTile(
+            refreshedItems.Add(new RunningAppTile(
                 item.Handle,
                 item.ProcessId,
                 displayName,
@@ -1724,7 +1970,7 @@ public partial class DockWindow : GlassWindow
         foreach (var item in _backgroundAppItems)
         {
             var glyph = item.DisplayName.Length == 0 ? "·" : item.DisplayName[..1].ToUpperInvariant();
-            _switcherItems.Add(new RunningAppTile(
+            refreshedItems.Add(new RunningAppTile(
                 0,
                 item.ProcessId,
                 item.DisplayName,
@@ -1740,7 +1986,7 @@ public partial class DockWindow : GlassWindow
         foreach (var pinned in pinnedModels)
         {
             var glyph = pinned.DisplayName.Length == 0 ? "·" : pinned.DisplayName[..1].ToUpperInvariant();
-            _switcherItems.Add(new RunningAppTile(
+            refreshedItems.Add(new RunningAppTile(
                 0,
                 0,
                 pinned.DisplayName,
@@ -1755,7 +2001,7 @@ public partial class DockWindow : GlassWindow
         foreach (var item in _trayAppItems)
         {
             var glyph = item.DisplayName.Length == 0 ? "·" : item.DisplayName[..1].ToUpperInvariant();
-            _switcherItems.Add(new RunningAppTile(
+            refreshedItems.Add(new RunningAppTile(
                 0,
                 0,
                 item.DisplayName,
@@ -1766,6 +2012,7 @@ public partial class DockWindow : GlassWindow
                 IsTrayApp: true));
         }
 
+        _switcherItems.ReplaceAll(refreshedItems);
         UpdateSwitcherSummary(items.Count, _backgroundAppItems.Count, pinnedModels.Length, _trayAppItems.Count);
     }
 
@@ -1827,7 +2074,7 @@ public partial class DockWindow : GlassWindow
     {
         if ((sender as FrameworkElement)?.DataContext is not RunningAppTile item) return;
         if (!item.IsWindowSwitchable) return;
-        _appIslandHoverExpanded = false;
+        _appIslandStateMachine.DismissExpansion();
         _appIslandHoverCollapseTimer?.Stop();
         SetRunningAppSwitcherRequested(false);
         OnAutoHideFrame();
@@ -1860,7 +2107,7 @@ public partial class DockWindow : GlassWindow
             _services?.Running.ReconcileOnDemand();
             RefreshSwitcherItems();
         }
-        _appIslandHoverExpanded = false;
+        _appIslandStateMachine.DismissExpansion();
         _appIslandHoverCollapseTimer?.Stop();
         SetRunningAppSwitcherRequested(canShow && !_switcherRequested);
         if (_frameTimer is not null)
@@ -1871,26 +2118,34 @@ public partial class DockWindow : GlassWindow
         OnAutoHideFrame();
     }
 
-    private void OnAppIslandClick(object sender, RoutedEventArgs e) => ToggleRunningAppSwitcher();
+    private void OnAppIslandClick(object sender, RoutedEventArgs e)
+    {
+        if (_appIslandStateMachine.TogglePinned())
+        {
+            _appIslandHoverCollapseTimer?.Stop();
+            WakeSwitcherFrame();
+        }
+    }
 
     private void OnAppIslandMouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
     {
         if (!_fullscreenAppIslandEnabled || !_fullscreenAppIslandContext || _settingsWindowVisible
             || !ForegroundCoverage.IsExternalApplicationForeground()) return;
-        if (!_switcherRequested) _appIslandHoverExpanded = true;
-        if (_appIslandHoverExpanded) ScheduleAppIslandHoverCollapse();
-        else _appIslandHoverCollapseTimer?.Stop();
+        if (!_switcherRequested) _appIslandStateMachine.PointerEntered();
+        _appIslandHoverCollapseTimer?.Stop();
         WakeSwitcherFrame();
     }
 
     private void OnSwitcherHoverEnter(object sender, System.Windows.Input.MouseEventArgs e)
     {
+        if (!_switcherRequested) _appIslandStateMachine.PointerEntered();
         _appIslandHoverCollapseTimer?.Stop();
     }
 
     private void OnSwitcherHoverLeave(object sender, System.Windows.Input.MouseEventArgs e)
     {
-        if (!_appIslandHoverExpanded || _switcherRequested) return;
+        if (_appIslandStateMachine.State != AppIslandState.HoverExpanded || _switcherRequested) return;
+        _appIslandStateMachine.PointerLeft();
         ScheduleAppIslandHoverCollapse();
     }
 
@@ -1898,7 +2153,7 @@ public partial class DockWindow : GlassWindow
     {
         _appIslandHoverCollapseTimer ??= new System.Windows.Threading.DispatcherTimer
         {
-            Interval = TimeSpan.FromMilliseconds(700),
+            Interval = AppIslandStateMachine.DefaultCollapseDelay,
         };
         _appIslandHoverCollapseTimer.Tick -= OnAppIslandHoverCollapseTick;
         _appIslandHoverCollapseTimer.Tick += OnAppIslandHoverCollapseTick;
@@ -1909,9 +2164,8 @@ public partial class DockWindow : GlassWindow
     private void OnAppIslandHoverCollapseTick(object? sender, EventArgs e)
     {
         _appIslandHoverCollapseTimer?.Stop();
-        if (!_appIslandHoverExpanded || _switcherRequested || SwitcherContentLayer.IsMouseOver) return;
-        _appIslandHoverExpanded = false;
-        WakeSwitcherFrame();
+        if (_switcherRequested || SwitcherContentLayer.IsMouseOver) return;
+        if (_appIslandStateMachine.Advance()) WakeSwitcherFrame();
     }
 
     private void WakeSwitcherFrame()
@@ -1926,7 +2180,7 @@ public partial class DockWindow : GlassWindow
 
     private void OnCloseSwitcherClick(object sender, RoutedEventArgs e)
     {
-        _appIslandHoverExpanded = false;
+        _appIslandStateMachine.DismissExpansion();
         _appIslandHoverCollapseTimer?.Stop();
         SetRunningAppSwitcherRequested(false);
         WakeSwitcherFrame();
@@ -1948,6 +2202,13 @@ public partial class DockWindow : GlassWindow
         // 必须在句柄建立之后改扩展样式：点击本窗口时不得把前台让给别人。
         // 弹出物要取焦点时显式调 WindowActivation.TryBringToForeground。
         WindowStyles.MakeNoActivate(Handle);
+        if (!_powerModeNotificationSubscribed)
+        {
+            SystemEvents.PowerModeChanged += OnIslandPowerModeChanged;
+            _powerModeNotificationSubscribed = true;
+        }
+
+        _audioEndpointMonitor ??= new CoreAudioEndpointMonitor(OnEndpointVolumeChanged);
     }
 
     protected override void OnClosed(EventArgs e)
@@ -1955,6 +2216,20 @@ public partial class DockWindow : GlassWindow
         _frameTimer?.Stop();
         _switcherInventoryTimer?.Stop();
         _appIslandHoverCollapseTimer?.Stop();
+        _islandPowerRefreshTimer?.Stop();
+        _islandActivityTimer?.Stop();
+        _islandTimerTickTimer?.Stop();
+        if (_audioEndpointMonitor is not null)
+        {
+            _audioEndpointMonitor.VolumeChanged -= OnEndpointVolumeChanged;
+            _audioEndpointMonitor.Dispose();
+            _audioEndpointMonitor = null;
+        }
+        if (_powerModeNotificationSubscribed)
+        {
+            SystemEvents.PowerModeChanged -= OnIslandPowerModeChanged;
+            _powerModeNotificationSubscribed = false;
+        }
         Interlocked.Increment(ref _switcherInventoryGeneration);
         _failureNoticeTimer?.Stop();
         if (_dockSettings is not null)

@@ -45,6 +45,7 @@ public partial class DockWindow
         Dispatcher.VerifyAccess();
         if (_performanceSleepRequested == sleeping) return;
         _performanceSleepRequested = sleeping;
+        UpdateAppIslandContext();
         if (sleeping)
         {
             _showAfterPerformanceSleep = IsVisible;

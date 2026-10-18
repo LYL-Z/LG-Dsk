@@ -121,6 +121,12 @@
                       Padding="0" Content="×" FontSize="17" Background="Transparent" BorderThickness="0"
                       ToolTip="收起应用条" AutomationProperties.Name="收起运行应用条"
                       Click="OnCloseSwitcherClick" />
+              <TextBlock x:Name="SwitcherPowerText" DockPanel.Dock="Right" Margin="8,0,8,0"
+                         VerticalAlignment="Center" FontSize="9" MaxWidth="180" TextTrimming="CharacterEllipsis"
+                         Foreground="{Binding SecondaryForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+              <TextBlock x:Name="SwitcherActivityText" DockPanel.Dock="Right" Margin="4,0,8,0"
+                         VerticalAlignment="Center" FontSize="10" MaxWidth="180" TextTrimming="CharacterEllipsis" Visibility="Collapsed"
+                         Foreground="#FFC86B4F" />
               <TextBlock x:Name="SwitcherSummaryText" VerticalAlignment="Center" FontSize="11"
                          Text="窗口 0 · 后台 0"
                          Foreground="{Binding SecondaryForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
@@ -128,6 +134,25 @@
             <TextBlock Margin="8,0,8,5" Text="点击窗口即可切换；后台项表示进程仍在运行，但当前没有可切换窗口。"
                        FontSize="9"
                        Foreground="{Binding SecondaryForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+            <TextBlock x:Name="SwitcherTimerStatusText" Margin="8,2,8,4"
+                       Text="快捷倒计时（仅本次运行期间有效） · 暂无计时器" FontSize="9"
+                       Foreground="{Binding SecondaryForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+            <WrapPanel Margin="6,0,6,6" Orientation="Horizontal">
+              <Button Content="5 分钟" Tag="5" Margin="2" Padding="8,3" Focusable="False"
+                      AutomationProperties.Name="开始五分钟倒计时" Click="OnIslandTimerPresetClick" />
+              <Button Content="15 分钟" Tag="15" Margin="2" Padding="8,3" Focusable="False"
+                      AutomationProperties.Name="开始十五分钟倒计时" Click="OnIslandTimerPresetClick" />
+              <Button Content="25 分钟" Tag="25" Margin="2" Padding="8,3" Focusable="False"
+                      AutomationProperties.Name="开始二十五分钟倒计时" Click="OnIslandTimerPresetClick" />
+              <Button Content="45 分钟" Tag="45" Margin="2" Padding="8,3" Focusable="False"
+                      AutomationProperties.Name="开始四十五分钟倒计时" Click="OnIslandTimerPresetClick" />
+              <Button Content="暂停全部" Margin="2" Padding="8,3" Focusable="False"
+                      Click="OnIslandTimerPauseClick" />
+              <Button Content="继续全部" Margin="2" Padding="8,3" Focusable="False"
+                      Click="OnIslandTimerResumeClick" />
+              <Button Content="清除全部" Margin="2" Padding="8,3" Focusable="False"
+                      Click="OnIslandTimerClearClick" />
+            </WrapPanel>
             <TextBlock x:Name="NoRunningAppsText" Margin="12,6" HorizontalAlignment="Center"
                        Text="暂未检测到应用；仍可使用 Windows 的 Alt+Tab。"
                        FontSize="11" Visibility="Collapsed"
@@ -177,7 +202,7 @@
 
         <Border x:Name="AppIslandContentLayer" Margin="10,8" Visibility="Collapsed"
                 Background="Transparent" IsHitTestVisible="True" Panel.ZIndex="2">
-          <Button x:Name="AppIslandButton" MinWidth="164" Height="42" Padding="12,5"
+          <Button x:Name="AppIslandButton" MinWidth="176" MaxWidth="440" MinHeight="44" Padding="12,5"
                   Background="Transparent" BorderThickness="0" Focusable="False"
                   ToolTip="鼠标经过展开应用岛；显示固定应用、窗口、后台和可读取的托盘项目"
                   AutomationProperties.Name="展开 LG Dsk 应用岛"
@@ -192,7 +217,11 @@
                 <StackPanel VerticalAlignment="Center">
                   <TextBlock Text="LG Dsk" FontSize="10" FontWeight="SemiBold"
                              Foreground="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
-                  <TextBlock x:Name="AppIslandCountsText" Text="窗口 0 · 后台 0" FontSize="8"
+                  <TextBlock x:Name="AppIslandCountsText" Text="窗口 0 · 后台 0" FontSize="8" MaxWidth="330" TextTrimming="CharacterEllipsis"
+                             Foreground="{Binding SecondaryForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+                  <TextBlock x:Name="AppIslandActivityText" FontSize="7" MaxWidth="330" TextTrimming="CharacterEllipsis" Visibility="Collapsed"
+                             Foreground="#FFC86B4F" />
+                  <TextBlock x:Name="AppIslandPowerText" Text="电源状态读取中" FontSize="7" MaxWidth="330" TextTrimming="CharacterEllipsis"
                              Foreground="{Binding SecondaryForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
                 </StackPanel>
                 <TextBlock Text="✳" Margin="8,0,0,0" FontSize="15" Foreground="#FFC86B4F"
