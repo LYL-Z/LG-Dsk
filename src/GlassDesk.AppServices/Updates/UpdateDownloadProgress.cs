@@ -6,4 +6,7 @@ public sealed record UpdateDownloadProgress(
     long ReceivedBytes,
     long TotalBytes,
     int Attempt,
-    bool IsResuming);
+    bool IsResuming)
+{
+    public string? Source { get; init; }
+}

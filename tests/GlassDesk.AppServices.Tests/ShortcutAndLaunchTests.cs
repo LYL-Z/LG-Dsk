@@ -201,6 +201,21 @@ public class LaunchServiceTests
     }
 
     [Fact]
+    public void 文件条目不能伪装成接收文件的应用磁贴()
+    {
+        using var workspace = new TempWorkspace();
+        using var services = Create(workspace);
+        var document = ImportOne(services, workspace.CreateFile("已有文档.txt"));
+        var droppedFile = workspace.CreateFile("拖入文档.txt");
+
+        var result = services.Launch.LaunchWithFiles(document.Id, [droppedFile]);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(LaunchFailureReason.Unsupported, result.Failure);
+        Assert.Contains("只有程序和应用快捷方式", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void 目标消失时报告目标不存在并给出可读说明()
     {
         using var workspace = new TempWorkspace();

@@ -14,10 +14,8 @@ internal static partial class Program
 {
     private static int VerifyDockBuiltinEntries(string[] args)
     {
-        var directory = Path.GetFullPath(AppContext.BaseDirectory);
-        var marker = Path.Combine(directory, ".full-host-acceptance-root");
-        if (!File.Exists(marker) || File.ReadAllText(marker).Trim() != directory)
-            throw new InvalidOperationException("An explicitly marked test package is required.");
+        if (!TryRequireIsolatedFullHostPackage(out var directory, out var refusal))
+            return RefuseFullHostAcceptance(refusal);
         var report = Path.GetFullPath(Argument(args, "--report") ?? throw new ArgumentException("--report required"));
         var evidence = Path.GetDirectoryName(report)!;
         Directory.CreateDirectory(evidence);

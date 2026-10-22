@@ -122,7 +122,7 @@ public sealed class PhoneCornerOutlineTests
                     BindingFlags.Instance | BindingFlags.NonPublic)!;
                 var radius = (double)resolver.Invoke(settings,
                     [new AppearanceSettings { LauncherCornerRadius = 36 }])!;
-                Assert.Equal(80, radius);
+                Assert.Equal(28, radius);
             }
             finally
             {

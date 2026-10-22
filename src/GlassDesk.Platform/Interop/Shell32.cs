@@ -80,6 +80,24 @@ internal static partial class Shell32
     /// <summary>所有用户的「开始」菜单程序目录（<c>%ProgramData%\...\Start Menu\Programs</c>）。</summary>
     internal static readonly Guid FolderIdCommonPrograms = new("0139d44e-6afe-49f2-8690-3dafcae6ffb8");
 
+    /// <summary>当前用户下载目录；可能已重定向到 OneDrive 或其他卷。</summary>
+    internal static readonly Guid FolderIdDownloads = new("374DE290-123F-4565-9164-39C4925E467B");
+
+    /// <summary>查询所有驱动器的回收站状态；结构大小必须通过 cbSize 提供。</summary>
+    [LibraryImport("shell32.dll", EntryPoint = "SHQueryRecycleBinW", StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial int SHQueryRecycleBin(string? rootPath, ref ShellQueryRecycleBinInfo info);
+
+    /// <summary>由 Windows Shell 清空回收站；调用方须先取得明确确认。</summary>
+    [LibraryImport("shell32.dll", EntryPoint = "SHEmptyRecycleBinW", StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial int SHEmptyRecycleBin(nint owner, string? rootPath, uint flags);
+
+    /// <summary>带 FOF_ALLOWUNDO 的 Shell 文件操作，把文件放入回收站。</summary>
+    [LibraryImport("shell32.dll", EntryPoint = "SHFileOperationW")]
+    internal static partial int SHFileOperation(ref ShellFileOperation operation);
+
+    internal const uint ShEmptyRecycleBinNoConfirmation = 0x00000001;
+    internal const ushort FileOperationAllowUndo = 0x0040;
+
     // ---- 图标 ----
 
     /// <summary>取图标句柄。返回的句柄必须用 <c>DestroyIcon</c> 释放。</summary>
@@ -216,6 +234,27 @@ internal static partial class Shell32
         internal uint HotKey;
         internal nint IconOrMonitor;
         internal nint Process;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ShellQueryRecycleBinInfo
+    {
+        internal uint Size;
+        internal long Bytes;
+        internal long Items;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ShellFileOperation
+    {
+        internal nint Window;
+        internal uint Operation;
+        internal nint From;
+        internal nint To;
+        internal ushort Flags;
+        internal int AnyOperationsAborted;
+        internal nint NameMappings;
+        internal nint ProgressTitle;
     }
 
     /// <summary>

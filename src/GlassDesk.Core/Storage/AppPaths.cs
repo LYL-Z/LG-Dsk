@@ -16,8 +16,9 @@ namespace GlassDesk.Core.Storage;
 /// </remarks>
 public sealed class AppPaths
 {
-    /// <summary>漫游应用数据文件夹下的目录名。</summary>
-    public const string ProductFolderName = "GlassDesk";
+    /// <summary>本地用户数据目录中的产品文件夹名。</summary>
+    public const string ProductFolderName = "LG Dsk";
+    public const string PortableMarkerFileName = "portable.flag";
 
     public AppPaths(string rootDirectory)
     {
@@ -88,12 +89,21 @@ public sealed class AppPaths
     /// </summary>
     public string RecoveryDirectory => Path.Combine(RootDirectory, "recovery");
 
-    /// <summary>当前用户的数据目录：<c>%APPDATA%\GlassDesk</c>。</summary>
+    /// <summary>便携版使用程序目录下的 Data；安装版使用本地用户配置文件。</summary>
     public static AppPaths ForCurrentUser()
     {
-        // Acceptance data is portable and never points at the installed profile.
-        return new AppPaths(Path.Combine(AppContext.BaseDirectory, "Data"));
+        var applicationDirectory = Path.GetFullPath(AppContext.BaseDirectory);
+        if (IsPortableDeployment(applicationDirectory))
+            return new AppPaths(Path.Combine(applicationDirectory, "Data"));
+
+        var localApplicationData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (string.IsNullOrWhiteSpace(localApplicationData))
+            throw new InvalidOperationException("Windows 未提供当前用户的本地应用数据目录。");
+        return new AppPaths(Path.Combine(localApplicationData, ProductFolderName, "Data"));
     }
+
+    public static bool IsPortableDeployment(string applicationDirectory) =>
+        File.Exists(Path.Combine(Path.GetFullPath(applicationDirectory), PortableMarkerFileName));
 
     /// <summary>创建目录树。可以重复调用。</summary>
     public void EnsureCreated()

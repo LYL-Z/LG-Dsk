@@ -15,6 +15,9 @@ public enum StartupRegistrationState
     /// <summary>同名值存在，但不属于当前可执行文件。</summary>
     OtherTarget,
 
+    /// <summary>同名值指向另一份位于已知产品安装目录的 LG Dsk 程序。</summary>
+    OtherProductTarget,
+
     /// <summary>同名值指向已移除的本产品旧版可执行文件。</summary>
     StaleProductTarget,
 
@@ -85,7 +88,7 @@ public sealed class StartupRegistration
     }
 
     /// <summary>显式注册或撤销本产品的当前用户登录启动项。</summary>
-    public StartupChangeResult SetEnabled(string executablePath, bool enabled)
+    public StartupChangeResult SetEnabled(string executablePath, bool enabled, bool replaceProductTarget = false)
     {
         if (!TryCreateCommand(executablePath, out var fullPath, out var command, out var validationError))
         {
@@ -106,6 +109,11 @@ public sealed class StartupRegistration
             var conflict = "同名登录启动项指向其它文件；为保护该项，LG Dsk 没有修改它。";
             return new(false, before with { Error = conflict }, conflict);
         }
+        if (before.State == StartupRegistrationState.OtherProductTarget && (!enabled || !replaceProductTarget))
+        {
+            var conflict = "登录启动项指向另一份 LG Dsk；只有在用户确认切换到当前程序后才会替换。";
+            return new(false, before with { Error = conflict }, conflict);
+        }
 
         RegistryKey? key = null;
         try
@@ -122,6 +130,11 @@ public sealed class StartupRegistration
             if (current.State == StartupRegistrationState.OtherTarget)
             {
                 var conflict = "登录启动项已被其它位置修改；为保护该项，LG Dsk 没有覆盖或删除它。";
+                return new(false, current with { Error = conflict }, conflict);
+            }
+            if (current.State == StartupRegistrationState.OtherProductTarget && (!enabled || !replaceProductTarget))
+            {
+                var conflict = "登录启动项现在指向另一份 LG Dsk；未收到明确切换确认，未修改它。";
                 return new(false, current with { Error = conflict }, conflict);
             }
             if (current.State == StartupRegistrationState.Unavailable)
@@ -195,45 +208,63 @@ public sealed class StartupRegistration
         var stored = key.GetValue(_valueName, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
         if (string.Equals(stored, expectedCommand, StringComparison.OrdinalIgnoreCase))
             return new(StartupRegistrationState.Owned, fullPath, null);
-        return TryGetMissingLegacyProductTarget(stored, out var staleTarget)
-            ? new(StartupRegistrationState.StaleProductTarget, staleTarget, null)
-            : new(StartupRegistrationState.OtherTarget, null, "同名登录启动项指向其它文件或包含其它参数。");
+        if (!TryGetProductStartupTarget(stored, out var productTarget))
+            return new(StartupRegistrationState.OtherTarget, null, "同名登录启动项指向其它文件或包含其它参数。");
+
+        try
+        {
+            var attributes = File.GetAttributes(productTarget!);
+            return (attributes & FileAttributes.Directory) == 0
+                ? new(StartupRegistrationState.OtherProductTarget, productTarget, null)
+                : new(StartupRegistrationState.OtherTarget, null, "登录启动项目标不是产品可执行文件。");
+        }
+        catch (FileNotFoundException)
+        {
+            return new(StartupRegistrationState.StaleProductTarget, productTarget, null);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new(StartupRegistrationState.StaleProductTarget, productTarget, null);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SecurityException or ArgumentException)
+        {
+            return new(StartupRegistrationState.OtherTarget, null, "无法核验同名登录项的目标文件；为保护它，不会自动替换。");
+        }
     }
 
-    private static bool TryGetMissingLegacyProductTarget(string? command, out string? targetPath)
+    private static bool TryGetProductStartupTarget(string? command, out string? targetPath)
     {
         targetPath = null;
-        const string suffix = "\" --autostart";
-        if (string.IsNullOrWhiteSpace(command) || command.Length <= suffix.Length + 2
-            || command[0] != '"' || !command.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(command) || command[0] != '"')
             return false;
 
-        var candidate = command[1..^suffix.Length];
+        var closingQuote = command.IndexOf('"', 1);
+        if (closingQuote <= 1)
+            return false;
+
+        var candidate = command[1..closingQuote];
+        var arguments = command[(closingQuote + 1)..].Trim();
+        // Older installers registered the executable without an argument. Treat that
+        // as a legacy product entry so the settings UI can offer an explicit switch,
+        // instead of disabling the checkbox as if an unrelated application owned it.
+        if (arguments.Length > 0 && !arguments.Equals(AutostartArgument, StringComparison.OrdinalIgnoreCase))
+            return false;
         if (!Path.IsPathFullyQualified(candidate)
             || !Path.GetFileNameWithoutExtension(candidate).Equals("GlassDesk", StringComparison.OrdinalIgnoreCase)
                 && !Path.GetFileNameWithoutExtension(candidate).Equals("LGDsk", StringComparison.OrdinalIgnoreCase)
             || !Path.GetExtension(candidate).Equals(".exe", StringComparison.OrdinalIgnoreCase))
             return false;
 
-        // A disconnected drive, inaccessible directory, or arbitrary missing copy must remain
-        // protected. Only repair a known product executable missing from an existing directory.
         var parent = Path.GetDirectoryName(candidate);
-        if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent)) return false;
+        var directoryName = string.IsNullOrEmpty(parent) ? string.Empty : Path.GetFileName(Path.TrimEndingDirectorySeparator(parent));
+        if (!directoryName.Equals("LG Dsk", StringComparison.OrdinalIgnoreCase)
+            && !directoryName.Equals("GlassDesk", StringComparison.OrdinalIgnoreCase)) return false;
         try
         {
-            _ = File.GetAttributes(candidate);
-            return false;
-        }
-        catch (FileNotFoundException)
-        {
-            targetPath = candidate;
+            targetPath = Path.GetFullPath(candidate);
             return true;
         }
-        catch (DirectoryNotFoundException)
-        {
-            return false;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SecurityException or ArgumentException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SecurityException or ArgumentException or NotSupportedException)
         {
             return false;
         }

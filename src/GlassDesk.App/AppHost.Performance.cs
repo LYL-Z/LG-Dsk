@@ -89,6 +89,7 @@ internal sealed partial class AppHost
     private void OnPerformanceSettingsChanged(object? sender, EventArgs e)
     {
         _performance?.SetAutoSuspend(_data!.Settings.Current.Performance.AutoSuspendWhenFullscreen, DateTimeOffset.UtcNow);
+        UpdateFullscreenAppIslandPolicy();
         ReconcilePerformance();
     }
 
@@ -173,8 +174,9 @@ internal sealed partial class AppHost
     private void UpdateFullscreenAppIslandPolicy()
     {
         if (_dock is null || _data is null) return;
-        var enabled = _data.Settings.Current.Performance.ShowFullscreenAppIsland;
-        _dock.SetFullscreenAppIslandEnabled(enabled);
+        var options = _data.Settings.Current.Performance;
+        _dock.SetFullscreenAppIslandEnabled(options.ShowFullscreenAppIsland);
+        _dock.SetAppIslandOptions(options.ExpandIslandOnHover, options.ShowTrayIcons);
 
         if (_fullscreenAppIslandTaskbarTimer is null)
         {
@@ -185,7 +187,9 @@ internal sealed partial class AppHost
             _fullscreenAppIslandTaskbarTimer.Tick += (_, _) => UpdateFullscreenAppIslandContext();
         }
 
-        if (enabled)
+        // Shell geometry is relevant to the desktop Dock even when the island is disabled.
+        // Keep a low frequency consistency check independent of the surface preference.
+        if (!_disposed && !_shuttingDown)
         {
             if (!_fullscreenAppIslandTaskbarTimer.IsEnabled)
                 _fullscreenAppIslandTaskbarTimer.Start();
@@ -202,13 +206,28 @@ internal sealed partial class AppHost
     {
         if (_dock is null || _data is null) return;
         var taskbarAutoHidden = FullscreenDetector.IsTaskbarAutoHidden();
-        if (_fullscreenAppIslandTaskbarAutoHidden is { } previous && previous != taskbarAutoHidden)
-            _dock.RefreshDisplayPlacement();
+        var changed = _fullscreenAppIslandTaskbarAutoHidden is { } previous && previous != taskbarAutoHidden;
         _fullscreenAppIslandTaskbarAutoHidden = taskbarAutoHidden;
+        var shellState = FullscreenDetector.QueryShellState();
+        var inputDesktop = ForegroundCoverage.ReadInputDesktopState();
+        var exclusiveFullscreen = shellState == UserNotificationState.RunningD3dFullScreen;
+        var safeShellState = shellState != UserNotificationState.Unknown
+            && inputDesktop == ForegroundCoverage.InputDesktopState.Default;
         var active = _data.Settings.Current.Performance.ShowFullscreenAppIsland
             && taskbarAutoHidden
+            && !exclusiveFullscreen
+            && safeShellState
             && ForegroundCoverage.IsExternalApplicationForeground();
-        _dock.SetFullscreenAppIslandContext(active);
+        _dock.SetFullscreenAppIslandContext(active, taskbarAutoHidden,
+            suppressOverlays: !safeShellState,
+            exclusiveFullscreen: exclusiveFullscreen);
+        if (changed)
+        {
+            // Maximized windows change their geometry without changing foreground HWND.
+            // The last fullscreen observation must not keep the Dock asleep after that change.
+            _performanceFullscreen?.Refresh();
+            _dock.ReconcileShellPlacement();
+        }
     }
 
     private void SchedulePerformanceDeadline(DateTimeOffset now)

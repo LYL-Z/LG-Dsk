@@ -8,37 +8,57 @@ public enum DockPresentationMode
     Hidden,
 }
 
+public enum DockForegroundKind { ShellDesktop, ExternalApplication, SecureDesktop, Unknown }
+public enum DockTaskbarKind { Visible, AutoHidden, Unknown }
+public enum DockFullscreenKind { NotExclusive, Exclusive, Unknown }
+public enum DockAwarenessRequest { None, CompactIsland, Switcher }
+
+/// <summary>A single shell snapshot used to choose a safe presentation surface.</summary>
+public readonly record struct DockPresentationContext(
+    DockForegroundKind Foreground,
+    DockTaskbarKind Taskbar,
+    DockFullscreenKind Fullscreen,
+    DockAwarenessRequest Request,
+    bool HasSwitcherContent,
+    bool LauncherActive = false,
+    bool SettingsWindowVisible = false);
+
 /// <summary>Chooses the smallest Dock surface needed for the current foreground context.</summary>
 public static class DockPresentationPolicy
 {
-    public static bool EffectiveExternalForeground(bool externalApplicationForeground, bool settingsWindowVisible) =>
-        externalApplicationForeground || settingsWindowVisible;
-
-    public static DockPresentationMode Resolve(
-        bool launcherActive,
-        bool externalApplicationForeground,
-        bool foregroundIsFullscreen,
-        bool hasSwitchableApplications,
-        bool switcherRequested,
-        bool settingsWindowVisible = false,
-        bool appIslandRequested = false)
+    public static DockPresentationMode Resolve(DockPresentationContext context)
     {
-        if (settingsWindowVisible)
+        if (context.SettingsWindowVisible
+            || context.Foreground is DockForegroundKind.SecureDesktop or DockForegroundKind.Unknown
+            || context.Fullscreen == DockFullscreenKind.Unknown)
             return DockPresentationMode.Hidden;
 
-        if (launcherActive || !externalApplicationForeground)
-            return DockPresentationMode.DesktopDock;
-
-        if (switcherRequested)
+        // A user-requested switcher is an explicit action, so it may be shown over
+        // a known exclusive fullscreen app. Passive surfaces remain suppressed.
+        if (context.Request == DockAwarenessRequest.Switcher
+            && context.Foreground == DockForegroundKind.ExternalApplication
+            && context.HasSwitcherContent)
             return DockPresentationMode.RunningAppSwitcher;
 
-        // The host admits this surface only after its event-based fullscreen
-        // observation and Windows taskbar auto-hide check agree. Trust that
-        // context here so exclusive-D3D fullscreen sessions are not rejected
-        // by the cheaper geometry-only foreground probe.
-        if (appIslandRequested)
+        if (context.Fullscreen == DockFullscreenKind.Exclusive)
+            return DockPresentationMode.Hidden;
+
+        if (context.LauncherActive || context.Foreground == DockForegroundKind.ShellDesktop)
+            return DockPresentationMode.DesktopDock;
+
+        if (context.Foreground != DockForegroundKind.ExternalApplication)
+            return DockPresentationMode.Hidden;
+
+        if (context.Request == DockAwarenessRequest.CompactIsland
+            && context.Taskbar == DockTaskbarKind.AutoHidden)
             return DockPresentationMode.RunningAppIsland;
 
-        return DockPresentationMode.Hidden;
+        // The Dock is a normal desktop surface while an ordinary application is
+        // foreground. Auto-hide is a separate user preference; foreground alone
+        // must not make the launcher's entry points disappear.
+        return DockPresentationMode.DesktopDock;
     }
+
+    public static bool EffectiveExternalForeground(bool externalApplicationForeground, bool settingsWindowVisible) =>
+        externalApplicationForeground || settingsWindowVisible;
 }

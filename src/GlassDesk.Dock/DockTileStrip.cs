@@ -15,8 +15,20 @@ namespace GlassDesk.Dock;
 /// <param name="Left">实际的画布左缘。</param>
 public readonly record struct PaintedTileState(string EntryId, double Scale, int ZIndex, double Left);
 
+/// <summary>应用磁贴接收的一次文件拖放。</summary>
+public sealed class DockTileFileDropEventArgs(
+    string entryId,
+    IReadOnlyList<string> paths,
+    DragDropEffects requestedEffect) : EventArgs
+{
+    public string EntryId { get; } = entryId;
+    public IReadOnlyList<string> Paths { get; } = paths.ToArray();
+    public DragDropEffects RequestedEffect { get; } = requestedEffect;
+    public DragDropEffects CompletedEffect { get; set; }
+}
+
 /// <summary>
-/// Dock 的磁贴条：固定槽位布局、放大动画、拖拽排序与溢出滚动都住在这里。
+/// Dock 的应用区：连续放大布局、拖拽排序与溢出滚动都住在这里。
 /// </summary>
 /// <remarks>
 /// <para>
@@ -62,10 +74,13 @@ public sealed class DockTileStrip : Border
     private readonly List<DockTileModel> _models = [];
     private readonly List<Border> _tiles = [];
 
+    /// <summary>Dock 使用的键盘焦点视觉样式，由窗口资源注入。</summary>
+    public Style? KeyboardFocusVisualStyle { get; set; }
+
     private readonly DockRenderLoop _animationLoop;
     private bool _pointerActive;
     private double _pointerPosition = double.NaN;
-    private int _hoveredTileIndex = -1;
+    private bool _ignoreNextButtonClick;
 
     private double _iconSize = 48;
     private double _spacing = 8;
@@ -80,6 +95,9 @@ public sealed class DockTileStrip : Border
 
     /// <summary>磁贴被右键（D-04）。参数是应用库条目 id；内置入口不触发。</summary>
     public event EventHandler<string>? TileContextMenuRequested;
+
+    /// <summary>文件被放到可接收文件的应用磁贴上。</summary>
+    public event EventHandler<DockTileFileDropEventArgs>? TileFileDropRequested;
 
     /// <summary>拖拽提交完成（顺序已落盘）或取消，宿主应重建磁贴行。</summary>
     public event EventHandler? ReorderFinished;
@@ -234,7 +252,6 @@ public sealed class DockTileStrip : Border
         _animationLoop.Stop();
         _pointerActive = false;
         _pointerPosition = double.NaN;
-        _hoveredTileIndex = -1;
         UpdateTileLayout();
         PaintFrame(null);
     }
@@ -257,11 +274,29 @@ public sealed class DockTileStrip : Border
         PaintFrame(CurrentPointerOrNull());
     }
 
+    /// <summary>
+    /// Shares the Dock row pointer with this strip so the magnification wave remains
+    /// continuous while the pointer is over neighboring Dock zones.
+    /// </summary>
+    public void SetExternalMagnificationPointer(Point stripPosition)
+    {
+        if (!IsLoaded || !IsVisible || _models.Count == 0) return;
+
+        var canvasPosition = TranslatePoint(stripPosition, _canvas);
+        if (!double.IsFinite(canvasPosition.X)) return;
+
+        _pointerPosition = canvasPosition.X;
+        _pointerActive = true;
+        _animationLoop.Start();
+    }
+
+    /// <summary>Clears a pointer supplied by the Dock row when it leaves the row.</summary>
+    public void ClearExternalMagnificationPointer() => ResetHover();
+
     /// <summary>指针离开磁贴条：所有磁贴平滑回到未放大。</summary>
     public void NotifyPointerLeft()
     {
         _pointerActive = false;
-        _hoveredTileIndex = -1;
         EnsureAnimating();
     }
 
@@ -330,9 +365,30 @@ public sealed class DockTileStrip : Border
         _ = content.Children.Add(body);
         _ = content.Children.Add(dot);
 
+        var button = new Button
+        {
+            Content = content,
+            Cursor = Cursors.Hand,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(0),
+            Focusable = false,
+            FocusVisualStyle = KeyboardFocusVisualStyle,
+            ToolTip = model.ToolTipText,
+            DataContext = model,
+        };
+
+        // ButtonAutomationPeer provides a usable UIA Invoke pattern while retaining
+        // the Border's painted-geometry hit test and existing Dock diagnostics.
+        System.Windows.Automation.AutomationProperties.SetName(button, model.DisplayName);
+        System.Windows.Automation.AutomationProperties.SetAutomationId(button, "dock-tile:" + model.EntryId);
+        System.Windows.Automation.AutomationProperties.SetHelpText(button, model.ToolTipText);
+        Bind(button, System.Windows.Automation.AutomationProperties.ItemStatusProperty,
+            model, nameof(DockTileModel.RunningAutomationStatus));
+
         var tile = new Border
         {
-            Child = content,
+            Child = button,
             RenderTransform = new ScaleTransform(1, 1),
             RenderTransformOrigin = new Point(0.5, 0.5),
             Cursor = Cursors.Hand,
@@ -344,13 +400,46 @@ public sealed class DockTileStrip : Border
         // 拖拽处理器只挂在应用磁贴上。内置入口没有拖拽，也就没有「拖出移除」这条路。
         if (draggable)
         {
-            tile.MouseLeftButtonDown += OnTileMouseDown;
+            tile.AllowDrop = true;
+            tile.PreviewMouseLeftButtonDown += OnTileMouseDown;
             tile.MouseMove += OnTileMouseMove;
+            tile.DragOver += OnTileFileDragOver;
+            tile.Drop += OnTileFileDrop;
         }
 
-        tile.MouseLeftButtonUp += OnTileMouseUp;
-        tile.MouseRightButtonUp += OnTileContextMenu;
+        tile.PreviewMouseLeftButtonUp += OnTileMouseUp;
+        tile.PreviewMouseRightButtonUp += OnTileContextMenu;
+        button.Click += OnTileButtonClick;
         return tile;
+    }
+
+    private static void OnTileFileDragOver(object sender, DragEventArgs e)
+    {
+        var status = DockFileDropData.TryRead(e.Data, out var paths);
+        if (status == DockFileDropDataStatus.NotPresent) return;
+
+        var model = (sender as FrameworkElement)?.DataContext as DockTileModel;
+        e.Effects = status != DockFileDropDataStatus.Valid || model is null
+            ? DragDropEffects.None
+            : DockFileDropPolicy.Resolve(model, paths, e.KeyStates, e.AllowedEffects);
+        e.Handled = true;
+    }
+
+    private void OnTileFileDrop(object sender, DragEventArgs e)
+    {
+        var status = DockFileDropData.TryRead(e.Data, out var paths);
+        if (status == DockFileDropDataStatus.NotPresent) return;
+        e.Handled = true;
+        e.Effects = DragDropEffects.None;
+
+        if (sender is not FrameworkElement { DataContext: DockTileModel model }) return;
+        if (status != DockFileDropDataStatus.Valid) return;
+        var requestedEffect = DockFileDropPolicy.Resolve(model, paths, e.KeyStates, e.AllowedEffects);
+        if (requestedEffect == DragDropEffects.None) return;
+
+        var request = new DockTileFileDropEventArgs(model.EntryId, paths, requestedEffect);
+        TileFileDropRequested?.Invoke(this, request);
+        e.Effects = request.CompletedEffect;
     }
 
     /// <summary>按下磁贴：记录起点与条目，等待移动阈值后才真正起拖。</summary>
@@ -625,6 +714,12 @@ public sealed class DockTileStrip : Border
 
     private void OnTileMouseUp(object sender, MouseButtonEventArgs e)
     {
+        // The visual button also exposes UIA Invoke. Suppress the native mouse click
+        // because pointer activation must continue to use the painted geometry below.
+        _ignoreNextButtonClick = true;
+        _ = Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input,
+            new Action(() => _ignoreNextButtonClick = false));
+
         // 命中不以 sender 为准，也不在这里重算几何：用**最后一次绘制帧**做判定
         // （视觉即所得）。重算会在动画中途与屏幕上的画面分叉。
         // 换算走「视口坐标 → 内容坐标」这一条路（只加一次偏移）。
@@ -641,6 +736,13 @@ public sealed class DockTileStrip : Border
         {
             TileClicked?.Invoke(this, _models[hit].EntryId);
         }
+    }
+
+    private void OnTileButtonClick(object sender, RoutedEventArgs e)
+    {
+        if (_ignoreNextButtonClick) return;
+        if (sender is Button { DataContext: DockTileModel model })
+            TileClicked?.Invoke(this, model.EntryId);
     }
 
     private void OnTileContextMenu(object sender, MouseButtonEventArgs e)
@@ -752,8 +854,6 @@ public sealed class DockTileStrip : Border
     private bool OnFrame(double deltaSeconds)
     {
         var targetPointer = CurrentPointerOrNull();
-        // Resolve the latest pointer once per frame, rather than for every queued mouse event.
-        _hoveredTileIndex = targetPointer is { } position ? FindHoveredTile(position) : -1;
         if (ThemeService.Current?.AnimationsEnabled == false)
         {
             PaintFrame(targetPointer);
@@ -767,7 +867,6 @@ public sealed class DockTileStrip : Border
         _animationLoop.Stop();
         _pointerActive = false;
         _pointerPosition = double.NaN;
-        _hoveredTileIndex = -1;
         PaintFrame(null);
     }
 
@@ -781,7 +880,6 @@ public sealed class DockTileStrip : Border
     public void PaintFrame(double? pointerPosition)
     {
         DockMagnification.ComputeInto(_paintedGeometry, _iconSize, _spacing, _peak, pointerPosition);
-        ApplyHoveredPeak(_paintedGeometry, pointerPosition);
         PaintGeometry(_paintedGeometry);
     }
 
@@ -789,58 +887,26 @@ public sealed class DockTileStrip : Border
     {
         var targets = _targetGeometry;
         DockMagnification.ComputeInto(targets, _iconSize, _spacing, _peak, pointerPosition);
-        ApplyHoveredPeak(targets, pointerPosition);
         var geometry = _paintedGeometry;
         var allSettled = true;
 
         for (var index = 0; index < targets.Length; index++)
         {
-            var currentScale = _tiles[index].RenderTransform is ScaleTransform transform
-                ? transform.ScaleX
-                : 1.0;
+            var current = geometry[index];
             var targetScale = targets[index].Scale;
-            var nextScale = DockHoverScale.Advance(currentScale, targetScale, deltaSeconds);
+            var nextScale = DockHoverScale.Advance(current.Scale, targetScale, deltaSeconds);
+            var nextCenter = DockHoverScale.Advance(current.Center, targets[index].Center, deltaSeconds);
 
-            if (nextScale != targetScale)
+            if (nextScale != targetScale || nextCenter != targets[index].Center)
             {
                 allSettled = false;
             }
 
-            geometry[index] = new TileGeometry(targets[index].Center, nextScale);
+            geometry[index] = new TileGeometry(nextCenter, nextScale);
         }
 
         PaintGeometry(geometry);
         return allSettled;
-    }
-
-    private void ApplyHoveredPeak(TileGeometry[] geometry, double? pointerPosition)
-    {
-        if (pointerPosition is null || _hoveredTileIndex < 0 || _hoveredTileIndex >= geometry.Length)
-        {
-            return;
-        }
-
-        geometry[_hoveredTileIndex] = new TileGeometry(geometry[_hoveredTileIndex].Center, _peak);
-    }
-
-    private int FindHoveredTile(double contentPosition)
-    {
-        var nearestIndex = -1;
-        var nearestDistance = double.PositiveInfinity;
-        var halfExpandedWidth = _iconSize * _peak / 2;
-
-        for (var index = 0; index < _models.Count; index++)
-        {
-            var center = DockMagnification.SlotCenter(index, _iconSize, _spacing, _peak);
-            var distance = Math.Abs(contentPosition - center);
-            if (distance <= halfExpandedWidth && distance < nearestDistance)
-            {
-                nearestIndex = index;
-                nearestDistance = distance;
-            }
-        }
-
-        return nearestIndex;
     }
 
     private void UpdateTileLayout()
@@ -876,6 +942,8 @@ public sealed class DockTileStrip : Border
             var index = order[rank];
             var tile = _tiles[index];
             var scale = geometry[index].Scale;
+            var left = geometry[index].Center - _iconSize / 2;
+            if (Canvas.GetLeft(tile) != left) Canvas.SetLeft(tile, left);
 
             // order 的第 0 项是「最上层」，而 ZIndex 越大越靠上——所以是**取反**赋值。
             // 早先写成 Panel.SetZIndex(tile, rank) 时，递增的 rank 把最小的磁贴放到了最上层，
@@ -889,6 +957,8 @@ public sealed class DockTileStrip : Border
                 if (transform.ScaleY != scale) transform.ScaleY = scale;
             }
         }
+
+        UpdateGroupDivider(geometry);
 
     }
 

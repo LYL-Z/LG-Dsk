@@ -9,11 +9,26 @@ public enum DockPlacement
     TopCenter = 3,
 }
 
+/// <summary>文件夹堆栈中项目的呈现方式。</summary>
+public enum DockFolderStackViewMode
+{
+    Grid = 0,
+    List = 1,
+    Fan = 2,
+}
+
+/// <summary>文件夹堆栈项目的排序方式。</summary>
+public enum DockFolderStackSortMode
+{
+    Name = 0,
+    ModifiedDate = 1,
+}
+
 public sealed class DockSettings
 {
     public const double FixedIconSize = 48;
     public const double FixedIconSpacing = 8;
-    public const double FixedMagnificationPeak = 1.15;
+    public const double FixedMagnificationPeak = 1.35;
     public const double MinimumFrameLengthDip = 180;
     public const double MaximumFrameLengthDip = 10000;
     public const double MinimumSizeScale = 2d / 3;
@@ -22,10 +37,18 @@ public sealed class DockSettings
     /// <summary>整体尺寸倍率，同时调整图标、间距与栏厚度。旧配置默认保持原尺寸。</summary>
     public double SizeScale { get; set; } = 1;
 
-    /// <summary>内置入口固定在应用左侧；旧配置默认显示全部入口。</summary>
+    /// <summary>启动台入口默认显示；Windows 专用快捷项默认不挤占 Dock 主区。</summary>
     public bool ShowLauncherEntry { get; set; } = true;
-    public bool ShowThisPcEntry { get; set; } = true;
-    public bool ShowDesktopIconsEntry { get; set; } = true;
+    public bool ShowThisPcEntry { get; set; }
+    public bool ShowDesktopIconsEntry { get; set; }
+    public bool ShowRecentApplications { get; set; } = true;
+    public int RecentApplicationsLimit { get; set; } = 3;
+
+    /// <summary>文件夹和下载堆栈默认展开方式；用户可从堆栈工具栏即时切换。</summary>
+    public DockFolderStackViewMode FolderStackViewMode { get; set; } = DockFolderStackViewMode.Grid;
+
+    /// <summary>文件夹和下载堆栈的默认排序；新旧配置均默认为名称升序。</summary>
+    public DockFolderStackSortMode FolderStackSortMode { get; set; } = DockFolderStackSortMode.Name;
 
     /// <summary>
     /// Dock 玻璃外框的横向长度，单位为 DIP。零表示继续按内容自动调整，

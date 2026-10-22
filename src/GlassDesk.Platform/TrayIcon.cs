@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using GlassDesk.Platform.Interop;
 
 namespace GlassDesk.Platform;
@@ -31,8 +32,13 @@ public enum TrayEvent
 /// </remarks>
 public sealed class TrayIcon : IDisposable
 {
+    private static readonly int taskbarCreatedMessage = unchecked((int)RegisterWindowMessage("TaskbarCreated"));
+
     /// <summary>shell 向宿主窗口投递本图标消息时使用的标识。</summary>
     public const int CallbackMessage = Shell32.WmTrayCallback;
+
+    /// <summary>Explorer 重建通知区域后广播的注册窗口消息。</summary>
+    public static int TaskbarCreatedMessage => taskbarCreatedMessage;
 
     private readonly nint _ownerWindow;
     private readonly int _id;
@@ -97,6 +103,13 @@ public sealed class TrayIcon : IDisposable
 
         var data = CreateData();
         return Shell32.Shell_NotifyIcon(Shell32.NimModify, ref data);
+    }
+
+    /// <summary>Explorer 重启清空通知区域后，使用仍由本实例持有的图标句柄重新注册。</summary>
+    public bool RestoreAfterShellRestart()
+    {
+        if (_disposed || _icon == 0) return false;
+        return Show(_icon, _tooltip);
     }
 
     /// <summary>把图标从通知区域移除。</summary>
@@ -181,4 +194,7 @@ public sealed class TrayIcon : IDisposable
         Shell32.NotifyIconData.SetText(data.Tip, Shell32.TipLength, _tooltip);
         return data;
     }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "RegisterWindowMessageW")]
+    private static extern uint RegisterWindowMessage(string message);
 }

@@ -14,11 +14,35 @@
     DragOver="OnExternalDragOver">
 
   <controls:GlassWindow.Resources>
+    <!-- Pixel artwork traced from the supplied references. Transparent margins let
+         the original 1.5.0 LiquidGlassSurface remain the single dock background. -->
+    <BitmapImage x:Key="FinderIcon"
+                 UriSource="pack://application:,,,/GlassDesk.Dock;component/Assets/UserReference/finder-icon.png" />
+    <BitmapImage x:Key="SettingsIcon"
+                 UriSource="pack://application:,,,/GlassDesk.Dock;component/Assets/UserReference/settings-icon.png" />
+    <BitmapImage x:Key="DownloadsIcon"
+                 UriSource="pack://application:,,,/GlassDesk.Dock;component/Assets/UserReference/downloads-icon.png" />
+    <BitmapImage x:Key="RecycleBinIcon"
+                 UriSource="pack://application:,,,/GlassDesk.Dock;component/Assets/UserReference/trash-icon.png" />
+
+    <Style x:Key="DockKeyboardFocusVisual" TargetType="{x:Type Control}">
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="{x:Type Control}">
+            <Border Margin="-3" Background="#22FFFFFF" BorderBrush="#E6FFFFFF"
+                    BorderThickness="2" CornerRadius="14">
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <Style x:Key="DockEntryButton" TargetType="Button">
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="Cursor" Value="Hand" />
       <Setter Property="BorderThickness" Value="0" />
-      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="Focusable" Value="False" />
+      <Setter Property="FocusVisualStyle" Value="{StaticResource DockKeyboardFocusVisual}" />
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
@@ -31,10 +55,8 @@
     </Style>
   </controls:GlassWindow.Resources>
 
-  <!--
-    图标行是真实的应用磁贴（D-07/D-08）。磁贴条（放大、滚动、命中）由
-    DockTileStrip 承担；这里的宿主只负责把它嵌进玻璃面板。
-  -->
+  <!-- LiquidGlassSurface is the only Dock backdrop. Content is arranged into
+       Favorites, Recent Applications, and Files/System Objects zones. -->
   <Border
       Background="Transparent"
       BorderThickness="0"
@@ -49,58 +71,159 @@
         </Grid.RenderTransform>
         <StackPanel x:Name="DockContentLayer" Orientation="Vertical" Margin="10,8">
 
-      <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-        <Button x:Name="LauncherButton" Width="48" Height="64" Margin="0,0,8,0" Padding="0"
+      <Grid x:Name="DockEntriesRow" Background="Transparent" VerticalAlignment="Center"
+            MouseMove="OnDockEntriesRowMouseMove" MouseLeave="OnDockEntriesRowMouseLeave">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <StackPanel x:Name="DockFavoritesGroup" Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+        <Canvas x:Name="DockLeadingEntries" VerticalAlignment="Center" ClipToBounds="False">
+        <Button x:Name="FinderButton" Width="48" Height="64" Padding="0"
+                Style="{StaticResource DockEntryButton}"
+                ToolTip="文件管理器" AutomationProperties.Name="打开文件管理器"
+                Click="OnFinderButtonClick">
+          <Image x:Name="FinderTile" Width="48" Height="48" Source="{StaticResource FinderIcon}" Stretch="Uniform"
+                 RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" />
+        </Button>
+        <Button x:Name="SettingsButton" Width="48" Height="64" Padding="0"
+                Style="{StaticResource DockEntryButton}"
+                ToolTip="设置" AutomationProperties.Name="打开设置"
+                Click="OnSettingsButtonClick">
+          <Image x:Name="SettingsTile" Width="48" Height="48" Source="{StaticResource SettingsIcon}" Stretch="Uniform"
+                 RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" />
+        </Button>
+        <Button x:Name="LauncherButton" Width="48" Height="64" Padding="0"
                 Style="{StaticResource DockEntryButton}"
                 Background="Transparent" BorderThickness="0"
                 ToolTip="启动台" AutomationProperties.Name="打开启动台"
-                MouseEnter="OnEntryMouseEnter" MouseLeave="OnEntryMouseLeave"
                 Click="OnLauncherButtonClick">
           <controls:PhoneBorder x:Name="LaunchpadTile" Width="48" Height="48" CornerRadius="16"
-                     Background="Transparent" BorderThickness="0">
-            <controls:LaunchpadGlyph OutlineBrush="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+                     BorderThickness="0">
+            <controls:PhoneBorder.Background>
+              <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#FF826AF0" Offset="0" />
+                <GradientStop Color="#FF4258C9" Offset="1" />
+              </LinearGradientBrush>
+            </controls:PhoneBorder.Background>
+            <controls:LaunchpadGlyph OutlineBrush="#FFF8F8FF" />
           </controls:PhoneBorder>
         </Button>
-        <Button x:Name="ThisPcButton" Width="48" Height="64" Margin="0,0,8,0" Padding="0"
+        <Button x:Name="ThisPcButton" Width="48" Height="64" Padding="0"
                 Style="{StaticResource DockEntryButton}"
                 Background="Transparent" BorderThickness="0"
                 ToolTip="此电脑" AutomationProperties.Name="打开此电脑"
-                MouseEnter="OnEntryMouseEnter" MouseLeave="OnEntryMouseLeave"
                 Click="OnThisPcButtonClick">
-          <Viewbox x:Name="ThisPcTile" Width="48" Height="48" HorizontalAlignment="Center" VerticalAlignment="Center">
+          <Border Background="#FF2F78D7" CornerRadius="12">
+            <Viewbox x:Name="ThisPcTile" Width="48" Height="48" HorizontalAlignment="Center" VerticalAlignment="Center">
             <Canvas Width="48" Height="48">
-              <Path Data="M6,6 H42 Q45,6 45,9 V29 Q45,32 42,32 H6 Q3,32 3,29 V9 Q3,6 6,6 Z M24,32 V39 M15,40 H33"
+              <Path Data="M9,9 H39 Q42,9 42,12 V30 Q42,33 39,33 H9 Q6,33 6,30 V12 Q6,9 9,9 Z M24,33 V39 M16,40 H32"
                     Fill="Transparent"
-                    Stroke="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}"
-                    StrokeThickness="3.5" StrokeLineJoin="Round"
+                    Stroke="#FFF5FAFF"
+                    StrokeThickness="3" StrokeLineJoin="Round"
                     StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
             </Canvas>
-          </Viewbox>
+            </Viewbox>
+          </Border>
         </Button>
-        <Button x:Name="DesktopIconsButton" Width="48" Height="64" Margin="0,0,8,0" Padding="0"
-                Style="{StaticResource DockEntryButton}"
-                ToolTip="切换桌面图标显示" AutomationProperties.Name="切换桌面图标显示"
-                MouseEnter="OnEntryMouseEnter" MouseLeave="OnEntryMouseLeave"
-                Click="OnDesktopIconsButtonClick">
-          <Viewbox x:Name="DesktopIconsTile" Width="48" Height="48" HorizontalAlignment="Center" VerticalAlignment="Center">
-            <Canvas Width="48" Height="48">
-              <Path Data="M6,6 H42 Q45,6 45,9 V29 Q45,32 42,32 H6 Q3,32 3,29 V9 Q3,6 6,6 Z M24,32 V39 M15,40 H33"
-                    Fill="Transparent"
-                    Stroke="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}"
-                    StrokeThickness="3.5" StrokeLineJoin="Round"
-                    StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
-              <Path Data="M11,12 H15 V16 H11 Z M11,22 H15 V26 H11 Z M23,15 H37 M32,10 L37,15 L32,20 M37,24 H23 M28,19 L23,24 L28,29"
-                    Fill="Transparent"
-                    Stroke="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}"
-                    StrokeThickness="3.5" StrokeLineJoin="Round"
-                    StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
-            </Canvas>
-          </Viewbox>
-        </Button>
-        <ContentControl x:Name="TileStripHost"
-                        AutomationProperties.Name="固定的应用"
-                        Focusable="False" />
-      </StackPanel>
+        </Canvas>
+        <ContentControl x:Name="TileStripHost" HorizontalAlignment="Left"
+                        AutomationProperties.Name="固定应用" Focusable="False" />
+        </StackPanel>
+
+        <Border x:Name="LeadingGroupDivider" Grid.Column="1" Width="1" Height="32" Margin="8,0,8,0"
+                Background="#667A7168" VerticalAlignment="Center" Visibility="Collapsed" />
+
+        <ScrollViewer x:Name="RecentApplicationsViewport" Grid.Column="2" VerticalAlignment="Center"
+                      HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
+                      CanContentScroll="False" Focusable="False" Visibility="Collapsed">
+        <ItemsControl x:Name="RecentApplicationsHost" VerticalAlignment="Center"
+                      AutomationProperties.Name="最近使用的应用">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate><Canvas ClipToBounds="False" /></ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemContainerStyle>
+            <Style TargetType="ContentPresenter">
+              <Setter Property="Canvas.Left" Value="{Binding CanvasLeft}" />
+              <Setter Property="Canvas.Top" Value="{Binding CanvasTop}" />
+              <Setter Property="Panel.ZIndex" Value="{Binding MagnificationZIndex}" />
+            </Style>
+          </ItemsControl.ItemContainerStyle>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Button Width="{Binding IconSize}" Height="{Binding TileHeight}" Padding="0"
+                      AllowDrop="True"
+                      RenderTransformOrigin="0.5,0.5"
+                      Style="{StaticResource DockEntryButton}"
+                      ToolTip="{Binding ToolTipText}"
+                      AutomationProperties.Name="{Binding DisplayName}"
+                      AutomationProperties.AutomationId="{Binding EntryId}"
+                      AutomationProperties.HelpText="{Binding ToolTipText}"
+                      AutomationProperties.ItemStatus="{Binding RunningAutomationStatus}"
+                      PreviewMouseLeftButtonDown="OnRecentApplicationMouseDown"
+                      MouseMove="OnRecentApplicationMouseMove"
+                      DragOver="OnApplicationFileDragOver"
+                      Drop="OnRecentApplicationFileDrop"
+                      PreviewMouseRightButtonUp="OnRecentApplicationRightClick"
+                      Click="OnRecentApplicationClick">
+                <Button.RenderTransform>
+                  <ScaleTransform ScaleX="{Binding MagnificationScale}" ScaleY="{Binding MagnificationScale}" />
+                </Button.RenderTransform>
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                  <Image x:Name="RecentApplicationImage" Width="{Binding IconSize}" Height="{Binding IconSize}"
+                         Source="{Binding Icon}" Stretch="Uniform"
+                         RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" />
+                  <Ellipse Width="5" Height="5" Margin="0,2,0,0"
+                           HorizontalAlignment="Center" Fill="{Binding DotBrush}"
+                           Visibility="{Binding RunningVisibility}" />
+                </StackPanel>
+              </Button>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        </ScrollViewer>
+
+        <Border x:Name="TrailingGroupDivider" Grid.Column="4" Width="1" Height="32" Margin="8,0,8,0"
+                Background="#667A7168" VerticalAlignment="Center" />
+
+        <Canvas x:Name="DockTrailingEntries" Grid.Column="5" VerticalAlignment="Center" ClipToBounds="False">
+          <Button x:Name="DownloadsButton" Width="48" Height="64" Margin="0" Padding="0"
+                    Style="{StaticResource DockEntryButton}"
+                    ToolTip="下载" AutomationProperties.Name="打开下载文件夹"
+                    Click="OnDownloadsButtonClick">
+            <Image x:Name="DownloadsTile" Width="48" Height="48" Source="{StaticResource DownloadsIcon}" Stretch="Uniform"
+                   RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" />
+          </Button>
+          <Button x:Name="RecycleBinButton" Width="48" Height="64" Margin="0" Padding="0"
+                    AllowDrop="True"
+                    Style="{StaticResource DockEntryButton}"
+                    ToolTip="回收站" AutomationProperties.Name="打开回收站"
+                    DragOver="OnRecycleBinDragOver" DragLeave="OnRecycleBinDragLeave"
+                    Drop="OnRecycleBinDrop" PreviewMouseRightButtonUp="OnRecycleBinRightClick"
+                    Click="OnRecycleBinButtonClick">
+            <Grid Width="48" Height="48">
+              <!-- Paper is drawn behind the supplied translucent, borderless bin artwork. -->
+              <Canvas x:Name="RecycleBinContentsOverlay" Width="48" Height="48"
+                      IsHitTestVisible="False" Visibility="Collapsed">
+                <Border Canvas.Left="17" Canvas.Top="22" Width="14" Height="12"
+                        Background="#FFF7F4EA" CornerRadius="1" RenderTransformOrigin="0.5,0.5">
+                  <Border.RenderTransform><RotateTransform Angle="-9" /></Border.RenderTransform>
+                </Border>
+                <Border Canvas.Left="22" Canvas.Top="25" Width="13" Height="11"
+                        Background="#FFECE7D9" CornerRadius="1" RenderTransformOrigin="0.5,0.5">
+                  <Border.RenderTransform><RotateTransform Angle="8" /></Border.RenderTransform>
+                </Border>
+              </Canvas>
+              <Image x:Name="RecycleBinTile" Width="48" Height="48" Source="{StaticResource RecycleBinIcon}" Stretch="Uniform"
+                     RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" />
+            </Grid>
+          </Button>
+        </Canvas>
+      </Grid>
 
       <TextBlock
           x:Name="StatusText"

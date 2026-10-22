@@ -1,4 +1,5 @@
 using System.IO;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using System.Windows.Interop;
@@ -8,11 +9,24 @@ using GlassDesk.Settings;
 using GlassDesk.UI.Controls;
 using GlassDesk.UI.Theming;
 using GlassDesk.Core.Models;
+using ThemeMode = GlassDesk.Core.Models.ThemeMode;
 
 namespace GlassDesk.Dock.Tests;
 
 public sealed class GlassMaterialSelectionTests
 {
+    [Fact]
+    public void HighContrastPaletteUsesOpaqueSystemColorsForSurfaceAndBorder()
+    {
+        var palette = GlassPalette.CreateHighContrast();
+
+        Assert.True(palette.IsHighContrast);
+        Assert.Equal(SystemColors.WindowColor, palette.FallbackPanelBackground);
+        Assert.Equal(SystemColors.WindowTextColor, palette.Foreground);
+        Assert.IsType<SolidColorBrush>(palette.ResolvePanelBrush(acrylicApplied: true));
+        Assert.IsType<SolidColorBrush>(palette.PanelBorderBrush);
+    }
+
     [Fact]
     public void SimplifiedAppearanceKeepsDarkLiquidGlassAndSavesRemainingControls()
     {
@@ -31,12 +45,12 @@ public sealed class GlassMaterialSelectionTests
                 new WindowInteropHelper(window).EnsureHandle();
                 window.Show();
                 window.UpdateLayout();
-                Assert.Null(window.FindName("ReduceTransparencyCheck"));
+                Assert.IsType<CheckBox>(window.FindName("ReduceTransparencyCheck"));
                 Assert.Equal(GlassSurfaceMode.SelfDrawn, window.SurfaceMode);
                 Assert.Equal(255, Assert.IsType<SolidColorBrush>(window.PanelBackgroundBrush).Color.A);
                 Assert.Same(window.PanelBackgroundBrush, Assert.IsType<Border>(window.Content).Background);
                 Assert.False(theme.Appearance.ReduceTransparency);
-                Assert.Null(window.FindName("AppearanceThemeCombo"));
+                Assert.Equal(2, Assert.IsType<ComboBox>(window.FindName("AppearanceThemeCombo")).SelectedIndex);
                 Assert.Equal(0, Assert.IsType<ComboBox>(window.FindName("AppearanceMaterialCombo")).SelectedIndex);
                 Assert.Null(window.FindName("GlassDebugViewCombo"));
                 Assert.Null(window.FindName("GlassPerformanceOverlayCheck"));

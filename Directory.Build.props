@@ -4,9 +4,10 @@
     Common build settings for every project in the GlassDesk solution.
 
     Target framework rules:
-      * src/GlassDesk.Core            -> net10.0          (no UI, no Windows APIs, unit-testable)
-      * src/GlassDesk.System          -> net10.0-windows  (Win32 interop)
-      * everything else under src/    -> net10.0-windows  (WPF)
+      * src/GlassDesk.Core            -> net10.0          (domain and storage; unit-testable)
+      * src/GlassDesk.Platform        -> net10.0-windows  (Win32 and Windows Shell integration)
+      * src/GlassDesk.AppServices     -> net10.0-windows  (Windows-facing application use cases)
+      * App, Dock, Launcher, Settings, UI -> net10.0-windows (WPF surfaces)
       * src/GlassDesk.App             -> WinExe, the only executable we ship
   -->
   <PropertyGroup>
@@ -17,9 +18,9 @@
     <Product>LG Dsk</Product>
     <Company>LG Dsk</Company>
     <!-- Product updates use this version; retain the delivered assembly identity. -->
-    <Version>1.5.0</Version>
+    <Version>1.6.0</Version>
     <AssemblyVersion>0.2.2.0</AssemblyVersion>
-    <FileVersion>1.5.0.0</FileVersion>
+    <FileVersion>1.6.0.0</FileVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <NeutralLanguage>zh-Hans</NeutralLanguage>
 

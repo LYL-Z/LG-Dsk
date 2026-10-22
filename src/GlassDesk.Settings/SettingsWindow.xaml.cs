@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using GlassDesk.Core.Models.Settings;
 using GlassDesk.Core.Storage;
 using GlassDesk.Platform;
@@ -26,7 +27,9 @@ public partial class SettingsWindow : GlassWindow
 {
     protected override bool UseOpaquePanel => true;
     protected override GlassPalette ResolveWindowPalette(GlassPalette inheritedPalette) =>
-        GlassPalette.CreateClaudeInspiredSettings();
+        ThemeService.Current is { IsHighContrast: true } theme
+            ? theme.Palette
+            : GlassPalette.CreateClaudeInspiredSettings();
 
     public static readonly DependencyProperty PlannedPagesProperty = DependencyProperty.Register(
         nameof(PlannedPages),
@@ -47,6 +50,7 @@ public partial class SettingsWindow : GlassWindow
     private bool _syncingCategoryFromScroll;
     private bool _sectionNavigationPending;
     private int _sectionNavigationVersion;
+    private ThemeService? _settingsTheme;
 
     public event EventHandler<LauncherSettings>? LauncherSettingsChanged;
 
@@ -63,15 +67,16 @@ public partial class SettingsWindow : GlassWindow
             _loadingAppearanceControls = false;
         }
 
-        _sectionHeadings = [AppearanceSectionHeading, DockSectionHeading, LauncherSectionHeading,
+        _sectionHeadings = [AppearanceSectionHeading, DockSectionHeading, IslandSectionHeading, LauncherSectionHeading,
             ShortcutsSectionHeading, PerformanceSectionHeading, DesktopSectionHeading, BackupSectionHeading, AboutSectionHeading];
         PlannedPages =
         [
             "外观",
             "Dock",
+            "应用岛",
             "启动台",
             "快捷操作",
-            "性能",
+            "性能与兼容",
             "桌面",
             "备份恢复",
             "关于",
@@ -82,7 +87,7 @@ public partial class SettingsWindow : GlassWindow
     private void OnSettingsWindowLoaded(object sender, RoutedEventArgs e) => SyncCategoryFromScroll();
 
     private bool CanResetSelectedPage => SettingsPageList.SelectedItem is string page
-        && page is "外观" or "Dock" or "启动台" or "快捷操作" or "性能" or "桌面";
+        && page is "外观" or "Dock" or "应用岛" or "启动台" or "快捷操作" or "性能与兼容" or "桌面";
 
     private void UpdateResetPageButton() => ResetPageButton.IsEnabled = SettingsPageList.IsEnabled
         && _dataStore is not null && CanResetSelectedPage;
@@ -98,7 +103,7 @@ public partial class SettingsWindow : GlassWindow
     protected override double ResolveCornerRadius(AppearanceSettings appearance)
     {
         ArgumentNullException.ThrowIfNull(appearance);
-        return Math.Max(80, appearance.LauncherCornerRadius);
+        return 28;
     }
 
     /// <summary>把数据存储交给窗口，让它能报告数据存放的位置。</summary>
@@ -151,12 +156,14 @@ public partial class SettingsWindow : GlassWindow
             var status = _startupRegistration.Query(_startupExecutablePath);
             AutostartCheck.IsChecked = status.State == StartupRegistrationState.Owned;
             AutostartCheck.IsEnabled = status.State is StartupRegistrationState.Missing
-                or StartupRegistrationState.Owned or StartupRegistrationState.StaleProductTarget;
+                or StartupRegistrationState.Owned or StartupRegistrationState.OtherProductTarget
+                or StartupRegistrationState.StaleProductTarget;
             AutostartStatus.Text = status.State switch
             {
                 StartupRegistrationState.Missing => "未注册；默认关闭。",
                 StartupRegistrationState.Owned => "已注册到当前用户登录项。Windows 的“启动应用”设置仍可禁用它。",
                 StartupRegistrationState.StaleProductTarget => $"发现失效的旧版启动路径：{status.TargetPath}。勾选后会替换为当前 LG Dsk，不会影响其它启动项。",
+                StartupRegistrationState.OtherProductTarget => $"登录启动项目前指向另一份 LG Dsk：{status.TargetPath}。勾选后会询问是否将此启动项切换到当前程序；另一份程序和它的数据不会被删除，但它将不再通过这个启动项自动运行。",
                 StartupRegistrationState.OtherTarget => "同名启动项指向其它位置；为保护其它副本，此处不会覆盖或删除它。",
                 _ => "无法读取或校验当前用户登录项：" + (status.Error ?? "原因未知。"),
             };
@@ -174,7 +181,28 @@ public partial class SettingsWindow : GlassWindow
         if (_loadingStartupRegistration || _startupRegistration is null) return;
 
         var enabled = AutostartCheck.IsChecked == true;
-        var result = _startupRegistration.SetEnabled(_startupExecutablePath, enabled);
+        var replaceProductTarget = false;
+        if (enabled)
+        {
+            var current = _startupRegistration.Query(_startupExecutablePath);
+            if (current.State == StartupRegistrationState.OtherProductTarget)
+            {
+                var answer = MessageBox.Show(this,
+                    $"当前用户的 LG Dsk 登录启动项指向另一份安装：\n{current.TargetPath}\n\n是否将这个启动项切换到当前正在运行的程序？另一份程序及其数据会保留，但它将不再由这个启动项自动启动。",
+                    "切换 LG Dsk 登录启动项",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning,
+                    MessageBoxResult.No);
+                if (answer != MessageBoxResult.Yes)
+                {
+                    RefreshStartupRegistration();
+                    return;
+                }
+                replaceProductTarget = true;
+            }
+        }
+
+        var result = _startupRegistration.SetEnabled(_startupExecutablePath, enabled, replaceProductTarget);
         RefreshStartupRegistration();
         if (!result.Succeeded)
         {
@@ -193,9 +221,20 @@ public partial class SettingsWindow : GlassWindow
             var dock = current.Dock;
             ShowLauncherEntryCheckBox.IsChecked = dock.ShowLauncherEntry;
             ShowThisPcEntryCheckBox.IsChecked = dock.ShowThisPcEntry;
-            ShowDesktopIconsEntryCheckBox.IsChecked = dock.ShowDesktopIconsEntry;
+            ShowRecentApplicationsCheckBox.IsChecked = dock.ShowRecentApplications;
+            RecentApplicationsLimitSlider.Value = dock.RecentApplicationsLimit;
+            DockAutoHideCheck.IsChecked = dock.AutoHide;
+            DockEdgeRevealCheck.IsChecked = dock.EdgeRevealEnabled;
+            DockAutoHideDelaySlider.Value = dock.AutoHideLeaveDelayMs;
             DockScaleSlider.Value = dock.SizeScale;
-            DockScaleReadout.Text = $"{dock.SizeScale:P0} · 图标 {48 * dock.SizeScale:0} DIP";
+            DockIconSizeSlider.Value = dock.IconSize;
+            DockSpacingSlider.Value = dock.IconSpacing;
+            DockPeakSlider.Value = dock.MagnificationPeak;
+            DockScaleReadout.Text = $"整体 {dock.SizeScale:P0} · 当前图标 {dock.IconSize * dock.SizeScale:0} DIP";
+            DockIconSizeReadout.Text = $"基础 {dock.IconSize:0} DIP · 实际 {dock.IconSize * dock.SizeScale:0} DIP";
+            DockSpacingReadout.Text = $"基础间距 {dock.IconSpacing:0} DIP · 实际 {dock.IconSpacing * dock.SizeScale:0} DIP";
+            DockPeakReadout.Text = $"{dock.MagnificationPeak:0.00}×";
+            DockAutoHideDelayReadout.Text = $"{dock.AutoHideLeaveDelayMs:0} 毫秒";
             DockPlacementCombo.SelectedIndex = (int)dock.Placement;
             var display = PrimaryDisplaySession is { IsAvailable: true } session
                 ? session.Display
@@ -204,10 +243,23 @@ public partial class SettingsWindow : GlassWindow
                 ? DockSettings.MaximumFrameLengthDip
                 : display.ToDips((int)display.WorkArea.Width) - 32;
             var maximum = Math.Min(DockSettings.MaximumFrameLengthDip, Math.Max(64, availableWidthDip));
-            var entryCount = (dock.ShowLauncherEntry ? 1 : 0) + (dock.ShowThisPcEntry ? 1 : 0)
-                + (dock.ShowDesktopIconsEntry ? 1 : 0);
-            var minimum = Math.Min(Math.Max(DockSettings.MinimumFrameLengthDip,
-                22 + (DockSettings.FixedIconSize + DockSettings.FixedIconSpacing) * entryCount) * dock.SizeScale, maximum);
+            var leftCount = 2 + (dock.ShowLauncherEntry ? 1 : 0) + (dock.ShowThisPcEntry ? 1 : 0);
+            var dividerCount = dock.ShowRecentApplications && dock.RecentApplicationsLimit > 0 ? 2 : 1;
+            var iconSize = dock.IconSize * dock.SizeScale;
+            var spacing = dock.IconSpacing * dock.SizeScale;
+            var peakExtra = iconSize * (dock.MagnificationPeak - 1) * 1.5;
+            var leadingLength = leftCount * iconSize + (leftCount - 1) * spacing + peakExtra;
+            var trailingCount = 2;
+            var trailingLength = trailingCount * iconSize + (trailingCount - 1) * spacing + peakExtra;
+            var pinnedMinimum = _dataStore.Layouts.Dock.PinnedItemIds.Count > 0
+                ? iconSize + peakExtra
+                : 0;
+            var minimumContent = leadingLength + trailingLength
+                + dividerCount * 17 * dock.SizeScale + pinnedMinimum;
+            if (dock.ShowRecentApplications && dock.RecentApplicationsLimit > 0)
+                minimumContent += iconSize + peakExtra;
+            minimumContent += 20 * dock.SizeScale;
+            var minimum = Math.Min(Math.Max(DockSettings.MinimumFrameLengthDip, minimumContent), maximum);
             DockFrameLengthSlider.Minimum = minimum;
             DockFrameLengthSlider.Maximum = maximum;
             var frameLengthValid = dock.FrameLengthDip == 0
@@ -220,12 +272,18 @@ public partial class SettingsWindow : GlassWindow
                 : "当前随图标内容自动调整；拖动滑块后固定外框长度。";
             _dockValuesOutOfRange = !Enum.IsDefined(dock.Placement)
                 || !Within(dock.OffsetX, -200, 200) || !Within(dock.OffsetY, -200, 200)
+                || !Within(dock.SizeScale, DockSettings.MinimumSizeScale, DockSettings.MaximumSizeScale)
+                || !Within(dock.IconSize, 32, 96) || !Within(dock.IconSpacing, 0, 24)
+                || !Within(dock.MagnificationPeak, 1, 2) || !Within(dock.RecentApplicationsLimit, 0, 3)
+                || !Within(dock.AutoHideLeaveDelayMs, 0, 3000)
                 || !frameLengthValid;
             DockOffsetXSlider.Value = Coerce(dock.OffsetX, -200, 200);
             DockOffsetYSlider.Value = Coerce(dock.OffsetY, -200, 200);
             DockSettingsStatus.Text = _dockValuesOutOfRange
                 ? "配置文件中有超出支持范围的数值，已显示为最近的可用值；请先恢复当前页默认，避免覆盖原数据。"
-                : "整体大小调整图标与栏高度；外框长度可独立调整。修改后立即保存并应用。";
+                : dock.AutoHide && !dock.EdgeRevealEnabled
+                    ? "自动隐藏需要边缘唤出；请启用边缘唤出，避免 Dock 隐藏后无法直接显示。"
+                    : "外框长度、最近应用、图标尺寸、间距和放大效果会立即保存并应用。";
         }
         finally { _loadingDockControls = false; }
     }
@@ -348,6 +406,17 @@ public partial class SettingsWindow : GlassWindow
         if (_loadingDockControls || _dataStore is null || DockPlacementCombo.SelectedIndex < 0) return;
         if (_dockValuesOutOfRange) { LoadDockControls(); return; }
 
+        var loadingDependency = _loadingDockControls;
+        _loadingDockControls = true;
+        try
+        {
+            if (ReferenceEquals(sender, DockAutoHideCheck) && DockAutoHideCheck.IsChecked == true)
+                DockEdgeRevealCheck.IsChecked = true;
+            else if (ReferenceEquals(sender, DockEdgeRevealCheck) && DockEdgeRevealCheck.IsChecked != true)
+                DockAutoHideCheck.IsChecked = false;
+        }
+        finally { _loadingDockControls = loadingDependency; }
+
         var current = _dataStore.Settings.Current;
         var previousDock = current.Dock;
         var previousCorner = current.Appearance.DockCornerRadius;
@@ -356,19 +425,21 @@ public partial class SettingsWindow : GlassWindow
             SizeScale = DockScaleSlider.Value,
             ShowLauncherEntry = ShowLauncherEntryCheckBox.IsChecked == true,
             ShowThisPcEntry = ShowThisPcEntryCheckBox.IsChecked == true,
-            ShowDesktopIconsEntry = ShowDesktopIconsEntryCheckBox.IsChecked == true,
-            IconSize = DockSettings.FixedIconSize,
-            IconSpacing = DockSettings.FixedIconSpacing,
-            MagnificationPeak = DockSettings.FixedMagnificationPeak,
+            ShowDesktopIconsEntry = previousDock.ShowDesktopIconsEntry,
+            ShowRecentApplications = ShowRecentApplicationsCheckBox.IsChecked == true,
+            RecentApplicationsLimit = (int)Math.Round(RecentApplicationsLimitSlider.Value),
+            IconSize = DockIconSizeSlider.Value,
+            IconSpacing = DockSpacingSlider.Value,
+            MagnificationPeak = DockPeakSlider.Value,
             FrameLengthDip = ReferenceEquals(sender, DockFrameLengthSlider)
                 ? DockFrameLengthSlider.Value
                 : previousDock.FrameLengthDip,
             Placement = (DockPlacement)DockPlacementCombo.SelectedIndex,
             OffsetX = DockOffsetXSlider.Value,
             OffsetY = DockOffsetYSlider.Value,
-            AutoHide = false,
-            AutoHideLeaveDelayMs = previousDock.AutoHideLeaveDelayMs,
-            EdgeRevealEnabled = false,
+            AutoHide = DockAutoHideCheck.IsChecked == true,
+            AutoHideLeaveDelayMs = (int)Math.Round(DockAutoHideDelaySlider.Value),
+            EdgeRevealEnabled = DockEdgeRevealCheck.IsChecked == true,
             EdgeHotzoneSize = previousDock.EdgeHotzoneSize,
             BlockRevealWhenCovered = previousDock.BlockRevealWhenCovered,
             TargetDisplayId = previousDock.TargetDisplayId,
@@ -398,7 +469,7 @@ public partial class SettingsWindow : GlassWindow
                 ? $"固定外框：{DockFrameLengthSlider.Value:0} DIP"
                 : "当前随图标内容自动调整；拖动滑块后固定外框长度。";
             LoadDockControls();
-            DockSettingsStatus.Text = $"已保存；整体大小 {next.SizeScale:P0}，图标 {48 * next.SizeScale:0} DIP。";
+            DockSettingsStatus.Text = $"已保存；图标 {next.IconSize * next.SizeScale:0} DIP，间距 {next.IconSpacing * next.SizeScale:0} DIP，放大 {next.MagnificationPeak:0.00}×。";
         }
         catch (Exception ex)
         {
@@ -462,8 +533,61 @@ public partial class SettingsWindow : GlassWindow
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
+        _settingsTheme = ThemeService.Current;
+        if (_settingsTheme is not null) _settingsTheme.Changed += OnSettingsThemeChanged;
+        ApplySettingsControlPalette();
         RefreshDiagnostics();
         RefreshStartupRegistration();
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        if (_settingsTheme is not null) _settingsTheme.Changed -= OnSettingsThemeChanged;
+        _settingsTheme = null;
+        base.OnClosed(e);
+    }
+
+    private void OnSettingsThemeChanged(object? sender, EventArgs e)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            if (!Dispatcher.HasShutdownStarted) Dispatcher.BeginInvoke(ApplySettingsControlPalette);
+            return;
+        }
+        ApplySettingsControlPalette();
+    }
+
+    private void ApplySettingsControlPalette()
+    {
+        if (!IsInitialized) return;
+        var highContrast = ThemeService.Current?.IsHighContrast == true;
+        var background = highContrast ? SystemColors.WindowColor : Color.FromRgb(0xFF, 0xFB, 0xF5);
+        var hover = highContrast ? SystemColors.HighlightColor : Color.FromRgb(0xFF, 0xF5, 0xE8);
+        var edge = highContrast ? SystemColors.WindowTextColor : Color.FromRgb(0xD8, 0xCA, 0xBB);
+        var active = highContrast ? SystemColors.HighlightColor : Color.FromRgb(0xC9, 0x6F, 0x52);
+        var text = highContrast ? SystemColors.WindowTextColor : Color.FromRgb(0x38, 0x2F, 0x2A);
+        var muted = highContrast ? SystemColors.GrayTextColor : Color.FromRgb(0x78, 0x6D, 0x63);
+        var popup = highContrast ? SystemColors.WindowColor : Color.FromRgb(0xFB, 0xF8, 0xF2);
+        var hoverEnd = highContrast ? SystemColors.HighlightColor : Color.FromRgb(0xEC, 0xE0, 0xD0);
+        var fill = new LinearGradientBrush(background, highContrast ? background : Color.FromRgb(0xF3, 0xEB, 0xDD), 90);
+        var hoverFill = new LinearGradientBrush(hover, hoverEnd, 90);
+        fill.Freeze(); hoverFill.Freeze();
+        Resources["LiquidControlFill"] = fill;
+        Resources["LiquidControlHover"] = hoverFill;
+        Resources["LiquidControlEdge"] = Brush(edge);
+        Resources["LiquidControlEdgeActive"] = Brush(active);
+        Resources["LiquidControlText"] = Brush(text);
+        Resources["LiquidControlMuted"] = Brush(muted);
+        Resources["LiquidControlPopup"] = Brush(popup);
+        Resources["LiquidControlSelected"] = Brush(highContrast ? SystemColors.HighlightColor : Color.FromArgb(0x33, 0xC9, 0x6F, 0x52));
+        Resources["LiquidControlAccent"] = Brush(active);
+
+        static SolidColorBrush Brush(Color color)
+        {
+            var value = new SolidColorBrush(color);
+            value.Freeze();
+            return value;
+        }
     }
 
     private void OnDragArea(object sender, MouseButtonEventArgs e)

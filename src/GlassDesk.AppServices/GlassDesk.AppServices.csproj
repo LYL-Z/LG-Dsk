@@ -22,6 +22,7 @@
     <ProjectReference Include="..\GlassDesk.Core\GlassDesk.Core.csproj" />
     <ProjectReference Include="..\GlassDesk.Platform\GlassDesk.Platform.csproj" />
     <EmbeddedResource Include="Resources\unihan-mandarin-17.txt" />
+    <EmbeddedResource Include="Resources\update-publisher-public.pem" />
   </ItemGroup>
 
 </Project>

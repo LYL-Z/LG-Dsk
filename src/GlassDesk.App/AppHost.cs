@@ -1,4 +1,6 @@
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -35,14 +37,14 @@ namespace GlassDesk.App;
 internal sealed partial class AppHost : IDisposable
 {
     /// <summary>
-    /// 本产品的实例标识。
+    /// 安装版和便携版分别使用实例标识；安装版跨版本共用，便携版按目录隔离。
     /// </summary>
     /// <remarks>
     /// 取名时特意避开 MacDock 的 <c>MacDock_SingleInstance_7E3A9B1F</c>，
     /// 也避开启动台的 Electron 锁，好让 GlassDesk
     /// 能与已装好的其中任何一个同时运行。
     /// </remarks>
-    private const string InstanceName = "GlassDesk.Host";
+    private const string InstalledInstanceName = "GlassDesk.Host";
 
     /// <summary>用于接收托盘消息的隐藏窗口的窗口类名。</summary>
     private const string MessageWindowName = "GlassDesk.TrayMessageWindow";
@@ -52,13 +54,17 @@ internal sealed partial class AppHost : IDisposable
 
     private readonly Application _application;
     private readonly CommandLineOptions _options;
+    private readonly bool _isPortableDeployment;
+    private readonly string _instanceName;
 
     private SingleInstanceGuard? _guard;
     private UserDataLease? _userDataLease;
+    private AppPaths? _userPaths;
     private GlassDeskDataStore? _data;
     private AppServiceHost? _services;
     private DataLoadReport? _loadReport;
     private HwndSource? _messageWindow;
+    private HwndSource? _taskbarCreatedSource;
     private TrayIcon? _tray;
     private nint _trayIconHandle;
     private MissingTargetReport? _missingReport;
@@ -79,6 +85,10 @@ internal sealed partial class AppHost : IDisposable
 
         _application = application;
         _options = options;
+        _isPortableDeployment = AppPaths.IsPortableDeployment(AppContext.BaseDirectory);
+        _instanceName = _isPortableDeployment
+            ? CreatePortableInstanceName(AppContext.BaseDirectory)
+            : InstalledInstanceName;
     }
 
     /// <summary>
@@ -87,7 +97,7 @@ internal sealed partial class AppHost : IDisposable
     /// <returns>本次启动的结果，决定宿主进程接下来该做什么。</returns>
     public StartupOutcome Start()
     {
-        _guard = SingleInstanceGuard.Acquire(InstanceName);
+        _guard = SingleInstanceGuard.Acquire(_instanceName);
 
         if (!_guard.IsFirstInstance)
         {
@@ -98,7 +108,7 @@ internal sealed partial class AppHost : IDisposable
 
         // 新版首实例也持有旧版使用的互斥体名称，阻止旧版随后启动并认为自己是首实例。
         // 此时还没有加载或创建用户数据；若旧锁已存在或无法确认，释放新版锁后安全退出。
-        if (!_guard.TryAcquireLegacyProtocolLease(out var legacyStatus))
+        if (!_isPortableDeployment && !_guard.TryAcquireLegacyProtocolLease(out var legacyStatus))
         {
             _guard.Dispose();
             _guard = null;
@@ -121,7 +131,23 @@ internal sealed partial class AppHost : IDisposable
             return StartupOutcome.NothingToDo;
         }
 
-        if (!UserDataLease.TryAcquireShared(AppPaths.ForCurrentUser().RootDirectory, out _userDataLease))
+        _userPaths = AppPaths.ForCurrentUser();
+        if (!_isPortableDeployment)
+        {
+            var legacyData = Path.Combine(AppContext.BaseDirectory, "Data");
+            var migration = UserDataMigration.MigrateLegacyData(legacyData, _userPaths.RootDirectory);
+            if (!migration.CanContinue)
+            {
+                MessageBox.Show(
+                    "LG Dsk 没有覆盖或删除旧数据。请先解决此迁移问题，再启动新版本：" + Environment.NewLine + migration.Error,
+                    "LG Dsk 用户数据迁移受阻",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return StartupOutcome.UserDataMigrationUnavailable;
+            }
+        }
+
+        if (!UserDataLease.TryAcquireShared(_userPaths.RootDirectory, out _userDataLease))
         {
             MessageBox.Show(
                 "无法取得 LG Dsk 用户数据的运行租约。数据可能正在维护，或当前文件夹不可访问；为保护数据，本次启动已停止。请稍后重试。",
@@ -144,7 +170,7 @@ internal sealed partial class AppHost : IDisposable
 
         var theme = ThemeService.Initialize(_application.Dispatcher);
 
-        _data = new GlassDeskDataStore(AppPaths.ForCurrentUser());
+        _data = new GlassDeskDataStore(_userPaths);
         _loadReport = _data.LoadAll();
 
         // 应用服务（导入、启动、图标、失效复查）在这里建一次，
@@ -251,6 +277,8 @@ internal sealed partial class AppHost : IDisposable
         DisposeInteractionController();
         DisposePerformanceCoordinator();
 
+        DetachTaskbarCreatedListener();
+
         _tray?.Dispose();
         _tray = null;
 
@@ -338,9 +366,18 @@ internal sealed partial class AppHost : IDisposable
 
         // 同步等待：进程马上就要退出，没有别的事可做。
         // 超时是为了覆盖正在运行的实例忙于启动的情况。
-        SingleInstanceGuard.TrySendCommandAsync(InstanceName, command, TimeSpan.FromSeconds(3))
+        SingleInstanceGuard.TrySendCommandAsync(_instanceName, command, TimeSpan.FromSeconds(3))
             .GetAwaiter()
             .GetResult();
+    }
+
+    private static string CreatePortableInstanceName(string applicationDirectory)
+    {
+        var normalizedPath = Path.GetFullPath(applicationDirectory)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .ToUpperInvariant();
+        var pathHash = SHA256.HashData(Encoding.UTF8.GetBytes(normalizedPath));
+        return $"{InstalledInstanceName}.Portable.{Convert.ToHexString(pathHash)}";
     }
 
     private void CreateWindows()
@@ -364,7 +401,14 @@ internal sealed partial class AppHost : IDisposable
         _settings.AttachInstallation(new InstallationLocator().Inspect(Environment.ProcessPath ?? string.Empty));
         _dock.AttachServices(_services!, _dockSettings!, (PixelRect? source) =>
             ToggleLauncherFromDock(_launcher, source, ShowLauncher));
-        _dock.ToggleDesktopIcons = () => ExecuteInteraction(GlassDesk.Core.Input.InputAction.ToggleDesktopIcons);
+        _dock.PersistDockSettings = dockSettings =>
+        {
+            var dataStore = _data ?? throw new InvalidOperationException("The settings store is not ready yet.");
+            dataStore.Settings.Current.Dock = dockSettings;
+            dataStore.Settings.Save();
+            _dockSettings!.Update(dockSettings);
+        };
+        _dock.OpenSettings = ShowSettings;
         _launcher.AttachServices(_services!, _loadReport?.LibraryStatus != LoadStatus.Unrecoverable);
         _launcher.InternalDragStarted += (_, _) => _dock?.RaiseAboveLauncherDuringDrag();
         _launcher.InternalDragFinished += (_, _) => _launcher?.RaiseAboveDockAfterDrag();
@@ -392,6 +436,7 @@ internal sealed partial class AppHost : IDisposable
         }
 
         _dock.Show();
+        AttachTaskbarCreatedListener();
 
         if (StartupIntent.ShouldOpenLauncher(_options))
         {
@@ -436,6 +481,32 @@ internal sealed partial class AppHost : IDisposable
 
         _tray = new TrayIcon(_messageWindow.Handle);
         _tray.Show(_trayIconHandle, "LG Dsk");
+    }
+
+    private void AttachTaskbarCreatedListener()
+    {
+        if (_dock is null) return;
+        var hwnd = new WindowInteropHelper(_dock).Handle;
+        if (hwnd == 0) return;
+        _taskbarCreatedSource = HwndSource.FromHwnd(hwnd);
+        _taskbarCreatedSource?.AddHook(OnTaskbarCreatedMessage);
+    }
+
+    private void DetachTaskbarCreatedListener()
+    {
+        if (_taskbarCreatedSource is null) return;
+        _taskbarCreatedSource.RemoveHook(OnTaskbarCreatedMessage);
+        _taskbarCreatedSource = null;
+    }
+
+    private nint OnTaskbarCreatedMessage(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
+    {
+        var taskbarCreatedMessage = TrayIcon.TaskbarCreatedMessage;
+        if (taskbarCreatedMessage == 0 || msg != taskbarCreatedMessage) return 0;
+
+        _tray?.RestoreAfterShellRestart();
+        handled = true;
+        return 0;
     }
 
     private nint OnMessageWindowProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)

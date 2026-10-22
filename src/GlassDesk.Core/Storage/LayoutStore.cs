@@ -19,6 +19,7 @@ public sealed class LayoutStore
     private readonly JsonFileStore<DockLayout> _dockStore;
     private readonly JsonFileStore<LauncherLayout> _launcherStore;
     private List<string> _lastSavedDockPins = [];
+    private List<string> _lastSavedDockRecents = [];
     private LauncherLayout _lastSavedLauncher = new();
 
     public LayoutStore(string dockLayoutPath, string launcherLayoutPath, TimeProvider? timeProvider = null)
@@ -49,7 +50,10 @@ public sealed class LayoutStore
         var outcome = _dockStore.Load(static () => new DockLayout());
         Dock = outcome.Value;
         Dock.PinnedItemIds ??= [];
+        Dock.RecentApplicationIds ??= [];
+        Dock.SchemaVersion = DockLayout.CurrentSchemaVersion;
         _lastSavedDockPins = [.. Dock.PinnedItemIds];
+        _lastSavedDockRecents = [.. Dock.RecentApplicationIds];
         return outcome;
     }
 
@@ -70,12 +74,14 @@ public sealed class LayoutStore
         {
             _dockStore.Save(Dock);
             _lastSavedDockPins = [.. Dock.PinnedItemIds];
+            _lastSavedDockRecents = [.. Dock.RecentApplicationIds];
         }
         catch
         {
             // Callers mutate the shared Dock object before saving. If the write fails,
             // leave every later reader with the last known persisted order.
             Dock.PinnedItemIds = [.. _lastSavedDockPins];
+            Dock.RecentApplicationIds = [.. _lastSavedDockRecents];
             throw;
         }
     }
@@ -127,6 +133,31 @@ public sealed class LayoutStore
         return Dock.PinnedItemIds.Remove(itemId);
     }
 
+    /// <summary>Records an application at the front of the recent list, excluding pinned items.</summary>
+    public bool RecordRecentApplication(string? itemId, int maximumItems = 3)
+    {
+        if (string.IsNullOrWhiteSpace(itemId) || maximumItems <= 0 || Dock.PinnedItemIds.Contains(itemId))
+            return false;
+
+        var next = new List<string>(Math.Clamp(maximumItems, 0, 3)) { itemId };
+        foreach (var recentId in Dock.RecentApplicationIds)
+        {
+            if (string.IsNullOrWhiteSpace(recentId)
+                || string.Equals(recentId, itemId, StringComparison.Ordinal)
+                || Dock.PinnedItemIds.Contains(recentId)
+                || next.Contains(recentId, StringComparer.Ordinal))
+                continue;
+
+            next.Add(recentId);
+            if (next.Count >= Math.Clamp(maximumItems, 0, 3)) break;
+        }
+
+        if (Dock.RecentApplicationIds.SequenceEqual(next, StringComparer.Ordinal)) return false;
+        Dock.RecentApplicationIds = next;
+        SaveDock();
+        return true;
+    }
+
     /// <summary>
     /// 清除两份布局中对该 id 的每一处引用。当记录从应用库
     /// 删除时调用它，也只在这种时候调用。
@@ -145,6 +176,9 @@ public sealed class LayoutStore
         {
             removed++;
         }
+
+        removed += Dock.RecentApplicationIds.RemoveAll(id =>
+            string.Equals(id, itemId, StringComparison.Ordinal));
 
         foreach (var page in Launcher.Pages)
         {

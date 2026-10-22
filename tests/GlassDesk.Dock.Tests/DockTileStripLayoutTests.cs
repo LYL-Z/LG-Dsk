@@ -49,7 +49,7 @@ public class DockTileStripLayoutTests
     }
 
     [Fact]
-    public void 重叠区域的命中等于绘制层级最上方的那一枚()
+    public void 放大重排后的绘制区域不重叠且命中与可见几何一致()
     {
         StaTest.Run(() =>
         {
@@ -57,26 +57,17 @@ public class DockTileStripLayoutTests
             strip.SetMetrics(Size, Spacing, Peak, 8, 0);
             strip.SetTiles(Models(3));
 
-            // 指针停在第 1 枚上：它放大后与第 0 枚重叠。
+            // 指针停在第 1 枚上：邻居应让位，图标间距与静止态保持一致。
             strip.PaintFrame(DockMagnification.SlotCenter(1, Size, Spacing, Peak));
 
-            var tiles = strip.PaintedTiles;
             var geometry = strip.PaintedGeometry.ToArray();
 
-            // 扫一遍整行：凡是命中结果非 -1 的位置，命中的必须是
-            // 「覆盖该点、且绘制层级最高」的那一枚——绘制与命中不得相反。
-            var checkedOverlaps = 0;
+            // 绘制与命中必须使用同一帧几何。重排模型保留相邻间距，
+            // 因此每个探测位置要么没有磁贴覆盖，要么只覆盖一枚。
 
             for (var probe = 0.0; probe <= strip.RequiredLength; probe += 1)
             {
-                var hit = strip.ResolveHit(probe);
-
-                if (hit < 0)
-                {
-                    continue;
-                }
-
-                var covering = Enumerable.Range(0, tiles.Count)
+                var covering = Enumerable.Range(0, geometry.Length)
                     .Where(index =>
                     {
                         var (center, scale) = geometry[index];
@@ -85,18 +76,9 @@ public class DockTileStripLayoutTests
                     })
                     .ToList();
 
-                if (covering.Count > 1)
-                {
-                    checkedOverlaps++;
-                }
-
-                // 覆盖者里绘制层级最高的那一枚。
-                var topMostCovering = covering.OrderByDescending(index => tiles[index].ZIndex).First();
-
-                Assert.Equal(topMostCovering, hit);
+                Assert.InRange(covering.Count, 0, 1);
+                Assert.Equal(covering.Count == 0 ? -1 : covering[0], strip.ResolveHit(probe));
             }
-
-            Assert.True(checkedOverlaps > 0, "用例前提不成立：整行没有出现过重叠区域");
         });
     }
 

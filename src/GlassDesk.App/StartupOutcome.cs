@@ -30,4 +30,7 @@ internal enum StartupOutcome
 
     /// <summary>无法识别 Windows 当前主显示器，已在创建可见窗口前阻止启动。</summary>
     PrimaryDisplayUnavailable = 5,
+
+    /// <summary>安装版旧数据无法安全迁移；两边数据均保留。</summary>
+    UserDataMigrationUnavailable = 6,
 }

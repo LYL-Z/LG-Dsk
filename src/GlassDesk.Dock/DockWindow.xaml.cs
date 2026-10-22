@@ -1,14 +1,19 @@
 using System.IO;
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Interop;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using GlassDesk.AppServices;
 using GlassDesk.Core.Contracts;
@@ -41,6 +46,8 @@ namespace GlassDesk.Dock;
 /// </remarks>
 public partial class DockWindow : GlassWindow
 {
+    private readonly record struct PendingDockIcon(DockTileModel Model, AppEntry Entry, IconCache Cache);
+
     /// <summary>启动失败提示在状态行上停留的时长。之后恢复成常规诊断文字。</summary>
     private static readonly TimeSpan FailureNoticeDuration = TimeSpan.FromSeconds(5);
 
@@ -50,12 +57,24 @@ public partial class DockWindow : GlassWindow
     private AppServiceHost? _services;
     private DockSettingsHost? _dockSettings;
     private Action<PixelRect?>? _toggleLauncher;
-    /// <summary>宿主提供与桌面图标快捷键相同的动作，不依赖快捷键是否启用。</summary>
-    public Action? ToggleDesktopIcons { get; set; }
+    /// <summary>宿主拥有设置窗口生命周期；Dock 只发出打开请求。</summary>
+    public Action? OpenSettings { get; set; }
+    /// <summary>持久化由宿主执行；Dock 只报告用户选择的新设置。</summary>
+    public Action<DockSettings>? PersistDockSettings { get; set; }
     private System.Windows.Threading.DispatcherTimer? _failureNoticeTimer;
     private readonly DockTileStrip _tileStrip;
+    private bool _keyboardFocusMode;
+    private nint _keyboardPreviousForeground;
 
     private readonly List<DockTileModel> _models = [];
+    private readonly List<DockTileModel> _recentModels = [];
+    private readonly ConcurrentQueue<PendingDockIcon> _pendingDockIcons = new();
+    private readonly ConcurrentDictionary<DockTileModel, byte> _queuedDockIcons = new();
+    private int _dockIconWorkerRunning;
+    private volatile bool _dockIconLoadsDisposed;
+    private string? _recentPressedEntryId;
+    private Point _recentPressPoint;
+    private bool _recentDragCompleted;
     private readonly ObservableRangeCollection<RunningAppTile> _switcherItems = [];
     private readonly IslandTimerCoordinator _islandTimers = new();
     private readonly Dictionary<string, BitmapSource?> _switcherIconCache = new(StringComparer.OrdinalIgnoreCase);
@@ -76,6 +95,11 @@ public partial class DockWindow : GlassWindow
     private bool _powerModeNotificationSubscribed;
     private bool _fullscreenAppIslandEnabled = true;
     private bool _fullscreenAppIslandContext;
+    private bool _taskbarAutoHiddenContext;
+    private bool _exclusiveFullscreenContext;
+    private bool _overlaySuppressedContext;
+    private bool _expandAppIslandOnHover = true;
+    private bool _showSwitcherTrayIcons = true;
 
     // ---- 自动隐藏（D-19） ----
 
@@ -90,6 +114,9 @@ public partial class DockWindow : GlassWindow
     private Rect? _slidePanelBoundsDip;
     private bool _backdropWasActive;
     private bool _panelWasConcealed;
+    private double _slideAnimationTargetPixels;
+    private TimeSpan? _lastSlideRenderingTime;
+    private bool _slideRenderingSubscribed;
 
     /// <summary>Keep the collapsed destination present until the expanded container has returned.</summary>
     public void SetLauncherContainerState(bool expanded)
@@ -98,8 +125,10 @@ public partial class DockWindow : GlassWindow
         UpdateAppIslandContext();
         if (expanded && !_performanceSleepRequested && _restingRect.Width > 0)
         {
+            StopSlideRendering();
             _autoHide?.ForceShown(DateTime.UtcNow);
             _slideOffsetPixels = 0;
+            _slideAnimationTargetPixels = 0;
             ApplySlide(_restingRect, 0);
         }
     }
@@ -129,12 +158,51 @@ public partial class DockWindow : GlassWindow
     }
 
     /// <summary>Host context reflects a real external fullscreen window and Windows taskbar auto-hide.</summary>
-    public void SetFullscreenAppIslandContext(bool active)
+    public void SetFullscreenAppIslandContext(
+        bool active,
+        bool taskbarAutoHidden = false,
+        bool suppressOverlays = false,
+        bool exclusiveFullscreen = false)
     {
-        if (_fullscreenAppIslandContext == active) return;
+        if (_fullscreenAppIslandContext == active && _taskbarAutoHiddenContext == taskbarAutoHidden
+            && _overlaySuppressedContext == suppressOverlays
+            && _exclusiveFullscreenContext == exclusiveFullscreen) return;
         _fullscreenAppIslandContext = active;
+        _taskbarAutoHiddenContext = taskbarAutoHidden;
+        _overlaySuppressedContext = suppressOverlays;
+        _exclusiveFullscreenContext = exclusiveFullscreen;
         UpdateAppIslandContext();
         RunningAppSwitcherVisibilityChanged?.Invoke(this, EventArgs.Empty);
+        OnAutoHideFrame();
+    }
+
+    /// <summary>Applies user preferences for hover expansion and accessible notification-area entries.</summary>
+    public void SetAppIslandOptions(bool expandOnHover, bool showTrayIcons)
+    {
+        Dispatcher.VerifyAccess();
+        var hoverChanged = _expandAppIslandOnHover != expandOnHover;
+        var trayChanged = _showSwitcherTrayIcons != showTrayIcons;
+        if (!hoverChanged && !trayChanged) return;
+
+        _expandAppIslandOnHover = expandOnHover;
+        _showSwitcherTrayIcons = showTrayIcons;
+        if (hoverChanged && !expandOnHover && _appIslandStateMachine.State == AppIslandState.HoverExpanded)
+        {
+            _appIslandStateMachine.DismissExpansion();
+            _appIslandHoverCollapseTimer?.Stop();
+        }
+
+        if (trayChanged)
+        {
+            Interlocked.Increment(ref _switcherInventoryGeneration);
+            if (!showTrayIcons) _trayAppItems = [];
+            RefreshSwitcherItems();
+            if (showTrayIcons && (_presentationMode is DockPresentationMode.RunningAppIsland or DockPresentationMode.RunningAppSwitcher))
+            {
+                if (_switcherInventoryRefreshInProgress) _switcherInventoryRefreshPending = true;
+                else _ = RefreshSwitcherInventoryAsync();
+            }
+        }
         OnAutoHideFrame();
     }
 
@@ -165,7 +233,10 @@ public partial class DockWindow : GlassWindow
     public DockWindow()
     {
         InitializeComponent();
+        DockEntriesRow.PreviewKeyDown += OnDockKeyboardNavigationKeyDown;
+        Deactivated += OnDockKeyboardNavigationDeactivated;
         InitializeEntryHover();
+        InitializeFileEntries();
         RunningAppsItems.ItemsSource = _switcherItems;
         PanelCornerRadius = new CornerRadius(40);
         _islandPowerRefreshTimer = new System.Windows.Threading.DispatcherTimer(
@@ -177,9 +248,13 @@ public partial class DockWindow : GlassWindow
         RefreshIslandPowerStatus();
         GlassSurface.IsBackdropActive = () => IsOpticalSurfaceVisible;
 
-        _tileStrip = new DockTileStrip();
+        _tileStrip = new DockTileStrip
+        {
+            KeyboardFocusVisualStyle = TryFindResource("DockKeyboardFocusVisual") as Style,
+        };
         _tileStrip.TileClicked += OnTileClicked;
         _tileStrip.TileContextMenuRequested += OnTileContextMenuRequested;
+        _tileStrip.TileFileDropRequested += OnTileFileDropRequested;
         _tileStrip.ReorderFinished += (_, _) => RefreshTiles();
         _tileStrip.UnpinRequested += OnUnpinRequested;
         _tileStrip.SetReorderModel(new DockReorderModel(SaveDockOrder));
@@ -187,6 +262,162 @@ public partial class DockWindow : GlassWindow
 
         // 常驻的内置入口不依赖宿主：构造完就该出现在磁贴行上。
         RefreshTiles();
+    }
+
+    /// <summary>Dock 是否已显示且当前允许切换到键盘操作。</summary>
+    public bool CanFocusKeyboardNavigation => IsVisible && IsLoaded && Handle != 0
+        && DockEntriesRow.IsVisible && !_performanceSleepRequested;
+
+    /// <summary>由用户配置的全局快捷键进入或退出 Dock 键盘导航。</summary>
+    public bool FocusForKeyboardNavigation()
+    {
+        if (!CanFocusKeyboardNavigation) return false;
+        if (_keyboardFocusMode)
+        {
+            EndKeyboardFocusMode(restorePreviousForeground: true);
+            return true;
+        }
+
+        _keyboardPreviousForeground = WindowControl.GetForegroundWindow();
+        if (!WindowStyles.MakeActivatable(Handle)) return false;
+
+        _keyboardFocusMode = true;
+        SetDockKeyboardTargetsFocusable(true);
+        OnAutoHideFrame();
+        if (_autoHide?.State == AutoHideState.Hidden || !DockEntriesRow.IsVisible)
+        {
+            EndKeyboardFocusMode(restorePreviousForeground: false);
+            return false;
+        }
+        if (!Activate() && !IsActive && !WindowActivation.TryBringToForeground(Handle))
+        {
+            EndKeyboardFocusMode(restorePreviousForeground: false);
+            return false;
+        }
+
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+        {
+            if (!_keyboardFocusMode || !IsActive) return;
+            var first = GetDockKeyboardTargets().FirstOrDefault();
+            if (first is null) return;
+            first.BringIntoView();
+            Keyboard.Focus(first);
+        }));
+        return true;
+    }
+
+    private void OnDockKeyboardNavigationKeyDown(object sender, KeyEventArgs e)
+    {
+        if (!_keyboardFocusMode) return;
+
+        if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            EndKeyboardFocusMode(restorePreviousForeground: true);
+            return;
+        }
+
+        var targets = GetDockKeyboardTargets();
+        if (targets.Count == 0) return;
+
+        if (e.Key is Key.Left or Key.Right)
+        {
+            var current = FindFocusedDockButton(Keyboard.FocusedElement as DependencyObject);
+            var index = current is null ? -1 : targets.IndexOf(current);
+            var delta = e.Key == Key.Right ? 1 : -1;
+            var nextIndex = index < 0
+                ? (delta > 0 ? 0 : targets.Count - 1)
+                : (index + delta + targets.Count) % targets.Count;
+            var next = targets[nextIndex];
+            e.Handled = true;
+            next.BringIntoView();
+            Keyboard.Focus(next);
+            return;
+        }
+
+        if (e.Key == Key.Enter && FindFocusedDockButton(Keyboard.FocusedElement as DependencyObject) is { } focused)
+        {
+            e.Handled = true;
+            focused.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, focused));
+        }
+    }
+
+    private void OnDockKeyboardNavigationDeactivated(object? sender, EventArgs e)
+        => EndKeyboardFocusMode(restorePreviousForeground: false);
+
+    private void EndKeyboardFocusMode(bool restorePreviousForeground)
+    {
+        if (!_keyboardFocusMode) return;
+
+        var previousForeground = _keyboardPreviousForeground;
+        ResetKeyboardFocusMode();
+        if (restorePreviousForeground && previousForeground != 0 && previousForeground != Handle)
+            _ = WindowActivation.TryBringToForeground(previousForeground);
+        OnAutoHideFrame();
+    }
+
+    private void ResetKeyboardFocusMode()
+    {
+        if (!_keyboardFocusMode) return;
+        _keyboardPreviousForeground = 0;
+        _keyboardFocusMode = false;
+        Keyboard.ClearFocus();
+        SetDockKeyboardTargetsFocusable(false);
+        if (Handle != 0) _ = WindowStyles.MakeNoActivate(Handle);
+    }
+
+    private List<Button> GetDockKeyboardTargets()
+    {
+        var visible = FindDockButtons(DockEntriesRow)
+            .Where(button => button.IsVisible && button.IsEnabled)
+            .ToArray();
+        foreach (var button in visible) button.Focusable = _keyboardFocusMode;
+
+        return visible
+            .Select(button => (Button: button, CenterX: TryGetDockButtonCenterX(button)))
+            .Where(item => double.IsFinite(item.CenterX))
+            .OrderBy(item => item.CenterX)
+            .Select(item => item.Button)
+            .ToList();
+    }
+
+    private void SetDockKeyboardTargetsFocusable(bool focusable)
+    {
+        foreach (var button in FindDockButtons(DockEntriesRow))
+            button.Focusable = focusable;
+    }
+
+    private double TryGetDockButtonCenterX(Button button)
+    {
+        try
+        {
+            return button.TransformToAncestor(DockEntriesRow)
+                .Transform(new Point(button.ActualWidth / 2, button.ActualHeight / 2)).X;
+        }
+        catch (InvalidOperationException)
+        {
+            return double.NaN;
+        }
+    }
+
+    private static Button? FindFocusedDockButton(DependencyObject? current)
+    {
+        while (current is not null)
+        {
+            if (current is Button button) return button;
+            current = current is Visual or System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(current)
+                : LogicalTreeHelper.GetParent(current);
+        }
+        return null;
+    }
+
+    private static IEnumerable<Button> FindDockButtons(DependencyObject root)
+    {
+        if (root is Button button) yield return button;
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+            foreach (var child in FindDockButtons(VisualTreeHelper.GetChild(root, index)))
+                yield return child;
     }
 
     /// <summary>
@@ -207,7 +438,17 @@ public partial class DockWindow : GlassWindow
         var sanitized = DockLayoutPolicy.Sanitize(order, id => _services.Library.Find(id) is not null);
 
         _services.Layouts.Dock.PinnedItemIds = sanitized;
-        _services.Layouts.SaveDock();
+        try
+        {
+            _services.Layouts.SaveDock();
+        }
+        catch (StorageException)
+        {
+            // LayoutStore restores the last persisted order before rethrowing.
+            // Rebuild the view so a failed drag cannot leave an uncommitted order on screen.
+            ShowFailureNotice("未能保存 Dock 排序；已恢复上次保存的顺序。");
+            RefreshTiles();
+        }
     }
 
     /// <summary>
@@ -308,17 +549,20 @@ public partial class DockWindow : GlassWindow
     /// <summary>悬停时接受可用的启动台应用条目或文件列表。</summary>
     private void OnExternalDragOver(object sender, DragEventArgs e)
     {
-        if (e.Data.GetDataPresent(LauncherDragContract.SlotDataFormat)
-            && e.Data.GetData(LauncherDragContract.SlotDataFormat) is string itemId)
+        if (DockFileDropData.TryReadString(e.Data, LauncherDragContract.SlotDataFormat, out var itemId))
         {
-            e.Effects = _services?.Library.Find(itemId) is { IsUsable: true }
+            e.Effects = (_services?.Library.Find(itemId) is { IsUsable: true }
+                && (e.AllowedEffects & DragDropEffects.Copy) != 0)
                 ? DragDropEffects.Copy
                 : DragDropEffects.None;
             e.Handled = true;
             return;
         }
 
-        e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop, true)
+        var fileStatus = DockFileDropData.TryRead(e.Data, out var filePaths);
+        e.Effects = fileStatus == DockFileDropDataStatus.Valid
+            && filePaths.Length > 0
+            && (e.AllowedEffects & DragDropEffects.Copy) != 0
             ? DragDropEffects.Copy
             : DragDropEffects.None;
         e.Handled = true;
@@ -339,21 +583,27 @@ public partial class DockWindow : GlassWindow
             return;
         }
 
-        if (e.Data.GetDataPresent(LauncherDragContract.SlotDataFormat)
-            && e.Data.GetData(LauncherDragContract.SlotDataFormat) is string itemId)
+        if (DockFileDropData.TryReadString(e.Data, LauncherDragContract.SlotDataFormat, out var itemId))
         {
             e.Handled = true;
+            e.Effects = (e.AllowedEffects & DragDropEffects.Copy) != 0
+                ? DragDropEffects.Copy
+                : DragDropEffects.None;
+            if (e.Effects == DragDropEffects.None) return;
             PinLauncherItem(itemId, e);
             return;
         }
 
-        if (!e.Data.GetDataPresent(DataFormats.FileDrop, true)) return;
+        var fileStatus = DockFileDropData.TryRead(e.Data, out var sources);
+        if (fileStatus == DockFileDropDataStatus.NotPresent) return;
         e.Handled = true;
-
-        if (e.Data.GetData(DataFormats.FileDrop, true) is not string[] { Length: > 0 } sources)
+        e.Effects = DragDropEffects.None;
+        if (fileStatus != DockFileDropDataStatus.Valid)
         {
+            ShowFailureNotice("Windows 未能读取拖入的文件列表。");
             return;
         }
+        if ((e.AllowedEffects & DragDropEffects.Copy) == 0) return;
 
         // 拖入期间自动隐藏计时被抑制，导入完成后恢复。
         _autoHide?.PushSuppress(DateTime.UtcNow);
@@ -362,6 +612,8 @@ public partial class DockWindow : GlassWindow
         {
             var requests = sources.Select(source => new ImportRequest { Source = source }).ToList();
             var result = _services.Import.ImportItems(requests);
+            var importedAny = result.Added.Count > 0 || result.Duplicates.Count > 0;
+            if (importedAny) e.Effects = DragDropEffects.Copy;
 
             // 已固定的 id 与「本次新增/已在库」合并——重复条目也要固定：
             // 把一条从 Dock 移出的应用再拖回来时，导入报的是「重复」，
@@ -392,6 +644,8 @@ public partial class DockWindow : GlassWindow
             ShowTemporaryNotice(result.Failures.Count == 0
                 ? $"已固定 {newlyPinned} 项（新增 {result.Added.Count}，已在库 {result.Duplicates.Count}）。"
                 : $"已固定 {newlyPinned} 项，{result.Failures.Count} 项失败。");
+
+            if (!importedAny) e.Effects = DragDropEffects.None;
 
             RefreshTiles();
         }
@@ -440,7 +694,7 @@ public partial class DockWindow : GlassWindow
     public DockSettings Settings => _dockSettings?.Settings ?? new DockSettings();
 
     /// <summary>
-    /// 当前磁贴总数（固定项 + 三个内置入口）。诊断与测试用。
+    /// 当前固定应用磁贴数。诊断与测试用。
     /// </summary>
     public int TileCount => _models.Count;
 
@@ -474,6 +728,7 @@ public partial class DockWindow : GlassWindow
         if (_services is not null)
         {
             _services.Running.Changed -= OnRunningChanged;
+            _services.Running.ForegroundApplicationChanged -= OnForegroundApplicationChanged;
         }
 
         _services = services;
@@ -482,6 +737,8 @@ public partial class DockWindow : GlassWindow
 
         _dockSettings.Changed += OnDockSettingsChanged;
         _services.Running.Changed += OnRunningChanged;
+        _services.Running.ForegroundApplicationChanged += OnForegroundApplicationChanged;
+        _services.Running.RefreshForegroundApplication();
 
         // 布局里可能残留旧版本写进去的内置入口（entry:*）或已经不存在的 id，
         // 在第一次画磁贴之前清掉。
@@ -539,11 +796,13 @@ public partial class DockWindow : GlassWindow
         }
 
         _tileStrip.SetTiles(_models);
+        RefreshRecentApplications();
         ApplyStripMetrics();
         RefreshSwitcherItems();
     }
 
-    private DockTileModel CreateTile(AppEntry entry, DockSettings settings, RunningAppTracker tracker, Brush? dotBrush)
+    private DockTileModel CreateTile(AppEntry entry, DockSettings settings, RunningAppTracker tracker,
+        Brush? dotBrush, bool runningTemporary = false)
     {
         var tooltip = entry.DisplayName;
 
@@ -553,6 +812,7 @@ public partial class DockWindow : GlassWindow
             // 与右键重新定位入口在批次 5 接入。
             tooltip += "（目标已不在原处，可重新定位）";
         }
+        if (runningTemporary) tooltip += "（正在运行，未固定）";
 
         return new DockTileModel
         {
@@ -561,13 +821,132 @@ public partial class DockWindow : GlassWindow
             ToolTipText = tooltip,
             Icon = LoadTileIcon(entry),
             DotBrush = dotBrush,
-            IconSize = DockSettings.FixedIconSize * DockScale,
-            TileMargin = new Thickness(DockSettings.FixedIconSpacing * DockScale / 2, 0, DockSettings.FixedIconSpacing * DockScale / 2, 0),
+            IconSize = settings.IconSize * DockScale,
+            TileHeight = (settings.IconSize + 8) * DockScale,
             IsMissing = entry.IsTargetMissing,
-            RunningVisibility = tracker.IsRunning(entry)
-                ? Visibility.Visible
-                : Visibility.Collapsed,
+            AcceptsFileDrop = !entry.IsTargetMissing
+                && entry.Kind is AppItemKind.Program or AppItemKind.Shortcut,
+            FolderDropPath = !entry.IsTargetMissing && entry.Kind == AppItemKind.Folder
+                ? entry.Target
+                : null,
+            RuntimeState = tracker.GetRuntimeState(entry),
         };
+    }
+
+    private void RefreshRecentApplications()
+    {
+        _recentModels.Clear();
+        var services = _services;
+        var settings = Settings;
+        if (services is not null)
+        {
+            var isLibraryEntry = (string id) => services.Library.Find(id) is { IsUsable: true };
+            var pinned = new HashSet<string>(services.Layouts.Dock.PinnedItemIds, StringComparer.Ordinal);
+            var isRunningFallback = !settings.ShowRecentApplications;
+            var recentIds = isRunningFallback
+                ? services.Running.FindRunningIds(services.Library.Items)
+                    .Where(id => !pinned.Contains(id) && isLibraryEntry(id)).ToList()
+                : DockLayoutPolicy.ProjectRecentApplications(
+                    services.Layouts.Dock.RecentApplicationIds,
+                    pinned,
+                    isLibraryEntry,
+                    settings.RecentApplicationsLimit);
+            var dotBrush = ThemeService.Current?.Palette.ForegroundBrush;
+            foreach (var id in recentIds)
+            {
+                var entry = services.Library.Find(id);
+                if (entry is { IsUsable: true })
+                    _recentModels.Add(CreateTile(entry, settings, services.Running, dotBrush, isRunningFallback));
+            }
+        }
+
+        RecentApplicationsHost.ItemsSource = null;
+        RecentApplicationsHost.ItemsSource = _recentModels;
+        var hasRecents = _recentModels.Count > 0;
+        RecentApplicationsViewport.Visibility = hasRecents ? Visibility.Visible : Visibility.Collapsed;
+        LeadingGroupDivider.Visibility = hasRecents ? Visibility.Visible : Visibility.Collapsed;
+        QueueMissingTileIcons();
+    }
+
+    private void OnRecentApplicationClick(object sender, RoutedEventArgs e)
+    {
+        if (_recentDragCompleted)
+        {
+            _recentDragCompleted = false;
+            return;
+        }
+
+        if (sender is Button { DataContext: DockTileModel model })
+            OnTileClicked(this, model.EntryId);
+    }
+
+    private void OnRecentApplicationMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _recentDragCompleted = false;
+        if (sender is Button { DataContext: DockTileModel model } button)
+        {
+            _recentPressedEntryId = model.EntryId;
+            // Store the pointer in the stable Dock row coordinate space. The button's
+            // RenderTransform changes while hover magnification animates; button-local
+            // coordinates can drift under a stationary pointer and start a false drag.
+            _recentPressPoint = e.GetPosition(DockEntriesRow);
+        }
+    }
+
+    private void OnRecentApplicationMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_recentPressedEntryId is not { } entryId || e.LeftButton != MouseButtonState.Pressed
+            || sender is not Button button)
+            return;
+
+        var position = e.GetPosition(DockEntriesRow);
+        if (Math.Abs(position.X - _recentPressPoint.X) < SystemParameters.MinimumHorizontalDragDistance
+            && Math.Abs(position.Y - _recentPressPoint.Y) < SystemParameters.MinimumVerticalDragDistance)
+            return;
+
+        _recentPressedEntryId = null;
+        _recentDragCompleted = true;
+        var data = new DataObject(LauncherDragContract.SlotDataFormat, entryId);
+        _autoHide?.PushSuppress(DateTime.UtcNow);
+        try
+        {
+            _ = DragDrop.DoDragDrop(button, data, DragDropEffects.Copy);
+        }
+        finally
+        {
+            _autoHide?.PopSuppress(DateTime.UtcNow);
+        }
+        e.Handled = true;
+    }
+
+    private void OnRecentApplicationRightClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is Button { DataContext: DockTileModel model })
+        {
+            e.Handled = true;
+            OnTileContextMenuRequested(this, model.EntryId);
+        }
+    }
+
+    private void OnForegroundApplicationChanged(object? sender, string entryId)
+    {
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
+        _ = Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_services is null || _performanceSleepRequested) return;
+            try
+            {
+                _services.Layouts.RecordRecentApplication(entryId, Settings.RecentApplicationsLimit);
+                RefreshRecentApplications();
+                ApplyStripMetrics();
+                ApplyFrameLength();
+                if (IsLoaded) PositionOnDisplay();
+            }
+            catch (StorageException)
+            {
+                ShowFailureNotice("最近使用记录未能保存；固定应用和玻璃 Dock 不受影响。");
+            }
+        }));
     }
 
     /// <summary>
@@ -583,35 +962,44 @@ public partial class DockWindow : GlassWindow
         var display = CurrentPrimaryDisplay;
         var scale = DockScale;
         DockContentLayer.Margin = new Thickness(10 * scale, 8 * scale, 10 * scale, 8 * scale);
-        if ((LauncherButton.Visibility == Visibility.Visible) != settings.ShowLauncherEntry
-            || (ThisPcButton.Visibility == Visibility.Visible) != settings.ShowThisPcEntry
-            || (DesktopIconsButton.Visibility == Visibility.Visible) != settings.ShowDesktopIconsEntry)
-            ResetEntryHover();
         LauncherButton.Visibility = settings.ShowLauncherEntry ? Visibility.Visible : Visibility.Collapsed;
         ThisPcButton.Visibility = settings.ShowThisPcEntry ? Visibility.Visible : Visibility.Collapsed;
-        DesktopIconsButton.Visibility = settings.ShowDesktopIconsEntry ? Visibility.Visible : Visibility.Collapsed;
-        foreach (var button in new[] { LauncherButton, ThisPcButton, DesktopIconsButton })
-        {
-            button.Width = 48 * scale;
-            button.Height = 64 * scale;
-            button.Margin = new Thickness(0, 0, 8 * scale, 0);
-        }
-        LaunchpadTile.Width = LaunchpadTile.Height = ThisPcTile.Width = ThisPcTile.Height
-            = DesktopIconsTile.Width = DesktopIconsTile.Height = 48 * scale;
+        var iconSize = settings.IconSize * scale;
+        var spacing = settings.IconSpacing * scale;
+        DownloadsButton.Margin = RecycleBinButton.Margin = new Thickness(0);
+        LaunchpadTile.Width = LaunchpadTile.Height = ThisPcTile.Width = ThisPcTile.Height = iconSize;
         LaunchpadTile.CornerRadius = new CornerRadius(16 * scale);
+        FinderTile.Width = FinderTile.Height = SettingsTile.Width = SettingsTile.Height
+            = DownloadsTile.Width = DownloadsTile.Height = RecycleBinTile.Width = RecycleBinTile.Height
+            = iconSize;
+        LeadingGroupDivider.Height = TrailingGroupDivider.Height = 32 * scale;
+        LeadingGroupDivider.Margin = TrailingGroupDivider.Margin = new Thickness(8 * scale, 0, 8 * scale, 0);
+        TrailingGroupDivider.Visibility = Visibility.Visible;
         PanelCornerRadius = new CornerRadius(40 * scale);
+        ApplyEntryMagnificationMetrics();
 
-        var contentLimit = display is null
-            ? 0.0
-            : Math.Max(1, display.ToDips((int)display.WorkArea.Width) - 32 - (28 + BuiltinEntryWidthDip) * scale);
-
-        if (settings.FrameLengthDip > 0)
-            contentLimit = Math.Max(1, ResolveEffectiveFrameLengthDip(settings.FrameLengthDip, display) - (22 + BuiltinEntryWidthDip) * scale);
+        var maxOuterWidth = settings.FrameLengthDip > 0
+            ? ResolveEffectiveFrameLengthDip(settings.FrameLengthDip, display)
+            : display is null ? 0 : Math.Max(1, display.ToDips((int)display.WorkArea.Width) - 32);
+        var contentWidth = maxOuterWidth > 0 ? Math.Max(1, maxOuterWidth - 20 * scale) : 0;
+        var fixedChrome = Math.Max(0, FixedDockChromeWidthDip - 20 * scale);
+        var dynamicWidth = contentWidth > 0 ? Math.Max(0, contentWidth - fixedChrome) : 0;
+        var recentDesiredWidth = RecentApplicationsHost.Width;
+        var pinnedMinimumWidth = _models.Count == 0
+            ? 0
+            : DockMagnification.RequiredLength(1, iconSize, spacing, settings.MagnificationPeak);
+        var recentWidthLimit = Math.Max(0, dynamicWidth - pinnedMinimumWidth);
+        RecentApplicationsViewport.MaxWidth = contentWidth > 0
+            ? Math.Min(recentDesiredWidth, recentWidthLimit)
+            : double.PositiveInfinity;
+        var contentLimit = contentWidth > 0
+            ? Math.Max(1, dynamicWidth - Math.Min(recentDesiredWidth, recentWidthLimit))
+            : 0;
 
         _tileStrip.SetMetrics(
-            DockSettings.FixedIconSize * scale,
-            DockSettings.FixedIconSpacing * scale,
-            DockSettings.FixedMagnificationPeak,
+            iconSize,
+            spacing,
+            settings.MagnificationPeak,
             8 * scale,
             contentLimit);
     }
@@ -619,12 +1007,34 @@ public partial class DockWindow : GlassWindow
     private double DockScale => double.IsFinite(Settings.SizeScale)
         ? Math.Clamp(Settings.SizeScale, DockSettings.MinimumSizeScale, DockSettings.MaximumSizeScale) : 1;
 
-    private double BuiltinEntryWidthDip => 56 * ((Settings.ShowLauncherEntry ? 1 : 0)
-        + (Settings.ShowThisPcEntry ? 1 : 0) + (Settings.ShowDesktopIconsEntry ? 1 : 0));
+    private double FixedDockChromeWidthDip
+    {
+        get
+        {
+            var settings = Settings;
+            var scale = DockScale;
+            var leadingCount = 2 + (settings.ShowLauncherEntry ? 1 : 0) + (settings.ShowThisPcEntry ? 1 : 0);
+            var zoneDividers = (_recentModels.Count > 0 ? 2 : 1) * 17 * scale;
+            var iconSize = settings.IconSize * scale;
+            var spacing = settings.IconSpacing * scale;
+            var leading = DockMagnification.RequiredLength(leadingCount, iconSize, spacing, settings.MagnificationPeak);
+            var trailing = DockMagnification.RequiredLength(2, iconSize, spacing, settings.MagnificationPeak);
+            return 20 * scale + leading + trailing + zoneDividers;
+        }
+    }
 
     private double ResolveEffectiveFrameLengthDip(double requested, DisplayInfo? display)
     {
-        var entryMinimum = Math.Max(DockSettings.MinimumFrameLengthDip, BuiltinEntryWidthDip + 22) * DockScale;
+        var settings = Settings;
+        var scaledIconSize = settings.IconSize * DockScale;
+        var scaledSpacing = settings.IconSpacing * DockScale;
+        var minimumDynamic = (_models.Count > 0
+                ? DockMagnification.RequiredLength(1, scaledIconSize, scaledSpacing, settings.MagnificationPeak)
+                : 0)
+            + (_recentModels.Count > 0
+                ? DockMagnification.RequiredLength(1, scaledIconSize, scaledSpacing, settings.MagnificationPeak)
+                : 0);
+        var entryMinimum = Math.Max(DockSettings.MinimumFrameLengthDip, FixedDockChromeWidthDip + minimumDynamic);
         if (display is null)
             return Math.Clamp(requested, entryMinimum, DockSettings.MaximumFrameLengthDip);
         var maxWidth = Math.Max(64, display.ToDips((int)display.WorkArea.Width) - 32);
@@ -683,9 +1093,7 @@ public partial class DockWindow : GlassWindow
         var custom = entry.CustomIconPath;
 
         if (!string.IsNullOrEmpty(custom) && File.Exists(custom))
-        {
-            return LoadBitmap(custom);
-        }
+            if (LoadBitmap(custom) is { } customIcon) return customIcon;
 
         if (_services is null || string.IsNullOrEmpty(entry.IconSource))
         {
@@ -693,12 +1101,103 @@ public partial class DockWindow : GlassWindow
         }
 
         var cached = _services.Icons.PathFor(entry.IconSource);
-        if (!File.Exists(cached))
+        return File.Exists(cached) ? LoadBitmap(cached) : null;
+    }
+
+    /// <summary>Extracts uncached application icons away from the WPF dispatcher.</summary>
+    private void QueueMissingTileIcons()
+    {
+        if (_services is null || _dockIconLoadsDisposed) return;
+
+        var cache = _services.Icons;
+        foreach (var model in _models.Concat(_recentModels))
         {
-            cached = _services.Icons.EnsureFor(entry.IconSource)?.Path ?? cached;
+            if (model.Icon is not null || !_queuedDockIcons.TryAdd(model, 0)) continue;
+            var entry = _services.Library.Find(model.EntryId);
+            if (entry is null || string.IsNullOrWhiteSpace(entry.IconSource))
+            {
+                _queuedDockIcons.TryRemove(model, out _);
+                continue;
+            }
+
+            _pendingDockIcons.Enqueue(new PendingDockIcon(model, entry, cache));
         }
 
-        return File.Exists(cached) ? LoadBitmap(cached) : null;
+        StartDockIconWorker();
+    }
+
+    private void StartDockIconWorker()
+    {
+        if (_dockIconLoadsDisposed || Interlocked.CompareExchange(ref _dockIconWorkerRunning, 1, 0) != 0)
+            return;
+
+        var worker = new Thread(ProcessDockIconQueue)
+        {
+            IsBackground = true,
+            Name = "LG Dsk Dock icon extraction",
+        };
+        try
+        {
+            worker.SetApartmentState(ApartmentState.STA);
+            worker.Start();
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            Volatile.Write(ref _dockIconWorkerRunning, 0);
+            Trace.TraceWarning("Dock icon worker could not start: {0}", exception.GetType().Name);
+        }
+    }
+
+    private void ProcessDockIconQueue()
+    {
+        try
+        {
+            while (!_dockIconLoadsDisposed && _pendingDockIcons.TryDequeue(out var pending))
+            {
+                BitmapImage? image = null;
+                try
+                {
+                    var customPath = pending.Entry.CustomIconPath;
+                    if (!string.IsNullOrWhiteSpace(customPath) && File.Exists(customPath))
+                        image = LoadBitmap(customPath);
+
+                    var iconSource = pending.Entry.IconSource;
+                    if (image is null && !string.IsNullOrWhiteSpace(iconSource))
+                    {
+                        var cached = pending.Cache.PathFor(iconSource);
+                        if (!File.Exists(cached))
+                            cached = pending.Cache.EnsureFor(iconSource)?.Path ?? cached;
+                        if (File.Exists(cached)) image = LoadBitmap(cached);
+                    }
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                    Trace.TraceWarning("Dock icon load failed for {0}: {1}", pending.Entry.Id, exception.GetType().Name);
+                }
+                finally
+                {
+                    _queuedDockIcons.TryRemove(pending.Model, out _);
+                }
+
+                if (image is null || _dockIconLoadsDisposed || Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+                    continue;
+
+                var loadedImage = image;
+                _ = Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+                {
+                    if (_dockIconLoadsDisposed || pending.Model.Icon is not null
+                        || !_models.Contains(pending.Model) && !_recentModels.Contains(pending.Model))
+                        return;
+
+                    pending.Model.Icon = loadedImage;
+                }));
+            }
+        }
+        finally
+        {
+            Volatile.Write(ref _dockIconWorkerRunning, 0);
+            if (!_dockIconLoadsDisposed && !_pendingDockIcons.IsEmpty) StartDockIconWorker();
+        }
     }
 
     private static BitmapImage? LoadBitmap(string path)
@@ -743,6 +1242,16 @@ public partial class DockWindow : GlassWindow
             return;
         }
 
+        if (entry is not null)
+        {
+            var runtimeState = _services.Running.GetRuntimeState(entry);
+            if (DockActivationPolicy.RequiresExplicitLaunchChoice(entry, runtimeState))
+            {
+                ShowBackgroundAppPrompt(entry, runtimeState);
+                return;
+            }
+        }
+
         var outcome = _services.Launch.ActivateOrLaunch(entryId);
 
         switch (outcome.Outcome)
@@ -761,6 +1270,57 @@ public partial class DockWindow : GlassWindow
         }
     }
 
+    /// <summary>
+    /// A confirmed background process without a matching window must not be relaunched
+    /// automatically. Offer an explicit retry and explain that it may create another instance.
+    /// </summary>
+    private void ShowBackgroundAppPrompt(AppEntry entry, AppRuntimeState runtimeState)
+    {
+        if (_services is null) return;
+
+        var stateIsUnknown = runtimeState == AppRuntimeState.Unknown;
+        _autoHide?.PushSuppress(DateTime.UtcNow);
+        var foregroundBefore = WindowControl.GetForegroundWindow();
+        var menu = new ContextMenu { Placement = PlacementMode.MousePoint };
+        nint menuHandle = 0;
+        menu.Opened += (_, _) =>
+            menuHandle = (PresentationSource.FromVisual(menu) as System.Windows.Interop.HwndSource)?.Handle ?? 0;
+
+        _ = menu.Items.Add(new MenuItem
+        {
+            Header = stateIsUnknown ? "无法确认应用的后台状态" : "后台运行中；没有可切换窗口",
+            ToolTip = stateIsUnknown
+                ? "继续打开可能会创建新实例。"
+                : "Dock 不会自动重复启动这个应用。",
+            IsEnabled = false,
+        });
+        _ = menu.Items.Add(new Separator());
+        _ = menu.Items.Add(MenuItem(
+            stateIsUnknown ? "继续打开（可能创建新实例）" : "仍然启动（可能打开新实例）", () =>
+        {
+            if (_services is null) return;
+            var result = _services.Launch.LaunchItem(entry.Id);
+            if (result.Succeeded)
+            {
+                ShowTemporaryNotice("已发送再次启动请求；若应用仍无窗口，请使用应用自身提供的入口。");
+            }
+            else
+            {
+                ShowFailureNotice(result.Message);
+            }
+        }));
+        _ = menu.Items.Add(MenuItem("取消", static () => { }));
+
+        menu.Closed += (_, _) =>
+        {
+            _autoHide?.PopSuppress(DateTime.UtcNow);
+            RestorePopupForeground(foregroundBefore, menuHandle);
+        };
+
+        _ = WindowActivation.TryBringToForeground(Handle);
+        menu.IsOpen = true;
+    }
+
     /// <summary>内置入口的动作分派。</summary>
     private void RunEntryAction(string name)
     {
@@ -774,7 +1334,7 @@ public partial class DockWindow : GlassWindow
             case "showdesktop":
                 // D-13：实现依据探针 D 的实测结论（逐窗口 SW_MINIMIZE）。
                 _ = DesktopCommands.ShowDesktop();
-                _ = RefreshPlacementAfterShellDesktopChangeAsync();
+                ReconcileShellPlacement();
                 break;
 
             case "recyclebin":
@@ -791,127 +1351,6 @@ public partial class DockWindow : GlassWindow
             default:
                 break;
         }
-    }
-
-    /// <summary>
-    /// 文件夹弹出面板（D-11）：列出文件夹里的条目，点击经外壳打开。
-    /// </summary>
-    /// <remarks>
-    /// 面板打开时取得键盘焦点，支持 Esc；关闭时只在焦点仍属于 Dock 的情况下
-    /// 归还原窗口，不抢回用户已切换到的其他应用。面板期间抑制自动隐藏。
-    /// 面板里的点击走同一条外壳路径（<see cref="ShellExecutor"/>）。
-    /// </remarks>
-    private void ShowFolderPanel(AppEntry folderEntry)
-    {
-        _autoHide?.PushSuppress(DateTime.UtcNow);
-        var foregroundBefore = WindowControl.GetForegroundWindow();
-
-        var palette = ThemeService.Current?.Palette;
-
-        var header = new TextBlock
-        {
-            Text = folderEntry.DisplayName,
-            FontWeight = FontWeights.Medium,
-            Margin = new Thickness(6, 4, 6, 2),
-        };
-
-        var list = new StackPanel();
-
-        _ = list.Children.Add(header);
-        _ = list.Children.Add(PanelItem("打开这个文件夹", () =>
-        {
-            var open = ShellExecutor.Open(folderEntry.Target, null, null);
-            if (!open.Started)
-            {
-                ShowFailureNotice("文件夹没能打开。");
-            }
-        }));
-
-        string[] children;
-
-        try
-        {
-            children = Directory
-                .EnumerateFileSystemEntries(folderEntry.Target)
-                .OrderBy(Path.GetFileName, StringComparer.CurrentCulture)
-                .Take(50)
-                .ToArray();
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
-        {
-            children = [];
-        }
-
-        if (children.Length == 0)
-        {
-            _ = list.Children.Add(new TextBlock
-            {
-                Text = "（空文件夹，或读不到内容）",
-                Margin = new Thickness(10, 4, 10, 6),
-            });
-        }
-
-        foreach (var child in children)
-        {
-            var path = child;
-            _ = list.Children.Add(PanelItem(Path.GetFileName(path), () =>
-            {
-                var open = ShellExecutor.Open(path, null, null);
-                if (!open.Started)
-                {
-                    ShowFailureNotice($"没能打开：{Path.GetFileName(path)}");
-                }
-            }));
-        }
-
-        var panel = new PhoneBorder
-        {
-            Background = palette?.ResolvePanelBrush(false) ?? Brushes.DimGray,
-            BorderBrush = palette?.PanelBorderBrush ?? Brushes.Gray,
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(4),
-            MinWidth = 220,
-            MaxHeight = 420,
-            Child = new ScrollViewer { Content = list, VerticalScrollBarVisibility = ScrollBarVisibility.Auto },
-        };
-
-        var popup = new Popup
-        {
-            Child = panel,
-            Placement = PlacementMode.MousePoint,
-            StaysOpen = false,
-            AllowsTransparency = true,
-        };
-
-        panel.Focusable = true;
-        panel.KeyDown += (_, args) =>
-        {
-            if (args.Key != System.Windows.Input.Key.Escape) return;
-            popup.IsOpen = false;
-            args.Handled = true;
-        };
-        popup.Closed += (_, _) =>
-        {
-            _autoHide?.PopSuppress(DateTime.UtcNow);
-            RestorePopupForeground(foregroundBefore, 0);
-        };
-        _ = WindowActivation.TryBringToForeground(Handle);
-        popup.IsOpen = true;
-        _ = panel.Focus();
-    }
-
-    private static TextBlock PanelItem(string text, Action onClick)
-    {
-        var item = new TextBlock
-        {
-            Text = text,
-            Padding = new Thickness(10, 5, 10, 5),
-            Cursor = System.Windows.Input.Cursors.Hand,
-        };
-
-        item.MouseLeftButtonUp += (_, _) => onClick();
-        return item;
     }
 
     /// <summary>
@@ -939,6 +1378,10 @@ public partial class DockWindow : GlassWindow
 
         _autoHide?.PushSuppress(DateTime.UtcNow);
 
+        IReadOnlyList<WindowIdentityInfo> windows = [];
+        if (entry.Kind is AppItemKind.Program or AppItemKind.Shortcut)
+            windows = _services.Running.FindWindows(entry);
+
         var menu = new ContextMenu
         {
             Placement = PlacementMode.MousePoint,
@@ -949,10 +1392,37 @@ public partial class DockWindow : GlassWindow
 
         _ = menu.Items.Add(MenuItem("打开", () => OnTileClicked(this, entryId)));
 
+        if (windows.Count > 1)
+        {
+            var allWindows = new MenuItem { Header = $"所有窗口（{windows.Count}）" };
+            for (var index = 0; index < windows.Count; index++)
+            {
+                var window = windows[index];
+                var fullTitle = string.IsNullOrWhiteSpace(window.Title) ? $"窗口 {index + 1}" : window.Title;
+                var visibleTitle = fullTitle.Length <= 72 ? fullTitle : fullTitle[..69] + "…";
+                var windowItem = new MenuItem { Header = visibleTitle, ToolTip = fullTitle };
+                AutomationProperties.SetName(windowItem, fullTitle);
+                windowItem.Click += (_, _) =>
+                {
+                    var result = LaunchService.ActivateWindow(window.Handle);
+                    if (result.Outcome != ActivationOutcome.Activated)
+                        ShowFailureNotice(result.Message ?? "没能把所选窗口切到前台。");
+                };
+                _ = allWindows.Items.Add(windowItem);
+            }
+            _ = menu.Items.Add(allWindows);
+        }
+
+        if (windows.Count > 0)
+            _ = menu.Items.Add(MenuItem("退出应用", () => RequestCloseApplication(windows)));
+
         if (entry.Kind == AppItemKind.Folder)
         {
             _ = menu.Items.Add(MenuItem("在面板中查看内容", () => ShowFolderPanel(entry)));
         }
+
+        if (entry.Kind is AppItemKind.Program or AppItemKind.Shortcut or AppItemKind.File or AppItemKind.Folder)
+            _ = menu.Items.Add(MenuItem("在文件资源管理器中显示", () => OpenEntryInExplorer(entry)));
 
         _ = menu.Items.Add(new Separator());
 
@@ -962,7 +1432,10 @@ public partial class DockWindow : GlassWindow
             _ = menu.Items.Add(MenuItem("重新定位…", () => RelocateFromDialog(entry)));
         }
 
-        _ = menu.Items.Add(MenuItem("从 Dock 移除", () => OnUnpinRequested(this, entryId)));
+        if (_services.Layouts.Dock.PinnedItemIds.Contains(entryId, StringComparer.Ordinal))
+            _ = menu.Items.Add(MenuItem("从 Dock 移除", () => OnUnpinRequested(this, entryId)));
+        else
+            _ = menu.Items.Add(MenuItem("固定到 Dock", () => PinEntryToDock(entryId)));
 
         menu.Closed += (_, _) =>
         {
@@ -972,6 +1445,75 @@ public partial class DockWindow : GlassWindow
 
         _ = WindowActivation.TryBringToForeground(Handle);
         menu.IsOpen = true;
+    }
+
+    private async void OpenEntryInExplorer(AppEntry entry)
+    {
+        if (string.IsNullOrWhiteSpace(entry.Target) || !Path.IsPathFullyQualified(entry.Target))
+        {
+            ShowFailureNotice("这个条目没有可定位的本地路径。");
+            return;
+        }
+
+        var target = entry.Target;
+        var result = await Task.Run(() =>
+        {
+            if (Directory.Exists(target)) return (Outcome: ShellExecutor.Open(target), Missing: false);
+            if (File.Exists(target))
+                return (Outcome: ShellExecutor.Open("explorer.exe", $"/select,\"{target}\""), Missing: false);
+            return (Outcome: (ShellLaunchOutcome?)null, Missing: true);
+        });
+
+        if (result.Missing)
+            ShowFailureNotice("目标已不在原处；可使用“重新定位”修复这个条目。");
+        else if (result.Outcome is { Started: false } outcome)
+            ShowFailureNotice($"Windows 未能定位此项目（0x{unchecked((uint)outcome.ErrorCode):X8}）。");
+    }
+
+    private void RequestCloseApplication(IReadOnlyList<WindowIdentityInfo> windows)
+    {
+        var requested = 0;
+        foreach (var window in windows)
+        {
+            if (WindowControl.Close(window.Handle)) requested++;
+        }
+
+        if (requested == 0)
+        {
+            ShowFailureNotice("窗口已关闭，或 Windows 未接受关闭请求。");
+            return;
+        }
+
+        ShowTemporaryNotice(requested == windows.Count
+            ? $"已向 {requested} 个窗口发送关闭请求；请处理应用可能显示的保存提示。"
+            : $"已向 {requested}/{windows.Count} 个窗口发送关闭请求；部分窗口可能已关闭或拒绝请求。");
+    }
+
+    private void PinEntryToDock(string entryId)
+    {
+        if (_services is null || _services.Library.Find(entryId) is not { IsUsable: true }) return;
+        var pinned = _services.Layouts.Dock.PinnedItemIds;
+        var merged = DockPinMerge.Merge(pinned, [entryId], []);
+        if (merged.Count == pinned.Count)
+        {
+            ShowTemporaryNotice("此应用已固定在 Dock 中。");
+            return;
+        }
+
+        _services.Layouts.Dock.PinnedItemIds = merged;
+        try
+        {
+            _services.Layouts.SaveDock();
+            ShowTemporaryNotice("已固定到 Dock。");
+            RefreshTiles();
+            ApplyFrameLength();
+            if (IsLoaded) PositionOnDisplay();
+        }
+        catch (StorageException)
+        {
+            ShowFailureNotice("固定项没能保存，原有顺序已恢复。");
+            RefreshTiles();
+        }
     }
 
     /// <summary>重新定位对话框：选一个真实存在的新目标，交给维护服务。</summary>
@@ -1222,13 +1764,23 @@ public partial class DockWindow : GlassWindow
                 return;
             }
 
-            foreach (var tile in _models)
+            foreach (var tile in _models.Concat(_recentModels))
             {
                 var entry = _services.Library.Find(tile.EntryId);
 
-                tile.RunningVisibility = entry is not null && _services.Running.IsRunning(entry)
-                    ? Visibility.Visible
-                    : Visibility.Collapsed;
+                tile.RuntimeState = entry is null
+                    ? AppRuntimeState.Unknown
+                    : _services.Running.GetRuntimeState(entry);
+            }
+
+            if (!Settings.ShowRecentApplications)
+            {
+                // Recent recommendations may be disabled, but running applications
+                // remain reachable as temporary, unpinned entries.
+                RefreshRecentApplications();
+                ApplyStripMetrics();
+                ApplyFrameLength();
+                if (IsLoaded) PositionOnDisplay();
             }
 
             RefreshSwitcherItems();
@@ -1267,7 +1819,9 @@ public partial class DockWindow : GlassWindow
         RefreshTiles();
 
         // 位置与偏移也属于即时生效（D-16）：设置一变，已打开的 Dock 当场搬家。
+        StopSlideRendering();
         _slideOffsetPixels = 0;
+        _slideAnimationTargetPixels = 0;
         PositionOnDisplay();
     }
 
@@ -1275,6 +1829,32 @@ public partial class DockWindow : GlassWindow
     private void RequestLauncherToggle(PixelRect? sourceBounds = null) => _toggleLauncher?.Invoke(sourceBounds);
 
     private void OnLauncherButtonClick(object sender, RoutedEventArgs e) => RequestLauncherToggle(GetLauncherButtonPixelBounds());
+
+    private void OnFinderButtonClick(object sender, RoutedEventArgs e)
+    {
+        var opened = ShellExecutor.Open("explorer.exe", null, null);
+        if (!opened.Started) ShowFailureNotice("文件管理器没能打开。");
+    }
+
+    private void OnSettingsButtonClick(object sender, RoutedEventArgs e) => OpenSettings?.Invoke();
+
+    private void OnDownloadsButtonClick(object sender, RoutedEventArgs e)
+    {
+        // Downloads is a folder stack, not a separate application. Resolve the Known
+        // Folder first so redirection and non-system volumes work; use the Shell alias
+        // as a recovery path if the Known Folder API cannot supply an existing path.
+        var target = KnownFolders.Downloads;
+        if (!string.IsNullOrWhiteSpace(target) && Directory.Exists(target))
+        {
+            ShowFolderPanel("下载", target, DownloadsButton);
+            return;
+        }
+
+        var opened = ShellExecutor.Open(target ?? "shell:Downloads", null, null);
+        if (!opened.Started) ShowFailureNotice("下载文件夹没能打开。");
+    }
+
+    private void OnRecycleBinButtonClick(object sender, RoutedEventArgs e) => RunEntryAction("recyclebin");
 
     /// <summary>Read the launcher button's current physical screen rectangle after Dock layout.</summary>
     public PixelRect? GetLauncherButtonPixelBounds()
@@ -1306,8 +1886,6 @@ public partial class DockWindow : GlassWindow
         }
     }
 
-    private void OnDesktopIconsButtonClick(object sender, RoutedEventArgs e) => ToggleDesktopIcons?.Invoke();
-
     // ---- 摆放 ----
 
     /// <summary>
@@ -1329,20 +1907,43 @@ public partial class DockWindow : GlassWindow
         PositionOnDisplay();
     }
 
-    private async Task RefreshPlacementAfterShellDesktopChangeAsync()
+    private long _shellPlacementGeneration;
+    private HwndSource? _shellPlacementSource;
+
+    /// <summary>Recover from Explorer work-area changes without activating another window.</summary>
+    public void ReconcileShellPlacement()
     {
-        // Explorer updates the taskbar work area after minimizing the last foreground window.
-        // Refresh twice around that shell notification so the Dock moves without an app restart.
-        foreach (var delay in new[] { 180, 620 })
+        Dispatcher.VerifyAccess();
+        var generation = ++_shellPlacementGeneration;
+        Reconcile();
+        _ = SettleAsync();
+
+        void Reconcile()
         {
-            await Task.Delay(delay);
-            if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
             RefreshDisplayPlacement();
+            if (!_performanceSleepRequested && CurrentPrimaryDisplay is not null)
+            {
+                if (!IsVisible) Show();
+                OnAutoHideFrame();
+            }
+        }
+
+        async Task SettleAsync()
+        {
+            // Explorer publishes bounds and work area in separate steps. Only the
+            // newest transition may settle; rapid toggles cannot replay old geometry.
+            foreach (var delay in new[] { 180, 620 })
+            {
+                await Task.Delay(delay);
+                if (generation != _shellPlacementGeneration || Dispatcher.HasShutdownStarted || !IsLoaded) return;
+                Reconcile();
+            }
         }
     }
 
     public void StopForPrimaryDisplayChange()
     {
+        StopSlideRendering();
         _frameTimer?.Stop();
         Hide();
     }
@@ -1383,7 +1984,7 @@ public partial class DockWindow : GlassWindow
         var heightPixels = Math.Max(1, display.ToPixels(heightDips));
 
         var topIslandPosition = _presentationMode == DockPresentationMode.RunningAppIsland
-            || _presentationMode == DockPresentationMode.RunningAppSwitcher && _fullscreenAppIslandContext;
+            || _presentationMode == DockPresentationMode.RunningAppSwitcher && _taskbarAutoHiddenContext;
         var placement = topIslandPosition ? DockPlacement.TopCenter : Settings.Placement;
         var usableWorkArea = EffectiveWorkArea(display);
         _restingRect = topIslandPosition
@@ -1479,7 +2080,7 @@ public partial class DockWindow : GlassWindow
     /// <summary>内容滑出方向：底部 Dock 向下 +1，顶部 Dock 向上 −1。</summary>
     private int SlideOutDirection()
         => _presentationMode == DockPresentationMode.RunningAppIsland
-            || _presentationMode == DockPresentationMode.RunningAppSwitcher && _fullscreenAppIslandContext
+            || _presentationMode == DockPresentationMode.RunningAppSwitcher && _taskbarAutoHiddenContext
             || Settings.Placement == DockPlacement.TopCenter ? -1 : 1;
 
     /// <summary>内容完全隐藏所需的物理像素偏移，窗口 HWND 本身始终留在主屏内。</summary>
@@ -1501,10 +2102,12 @@ public partial class DockWindow : GlassWindow
     {
         var settings = Settings;
 
+        StopSlideRendering();
         _autoHide = new AutoHideController(settings.AutoHideLeaveDelayMs);
 
         _autoHide.ForceShown(DateTime.UtcNow);
         _slideOffsetPixels = 0;
+        _slideAnimationTargetPixels = 0;
 
         if (_frameTimer is null)
         {
@@ -1539,8 +2142,10 @@ public partial class DockWindow : GlassWindow
 
         var now = DateTime.UtcNow;
         var fullscreen = FullscreenDetector.IsFullscreenActive();
+        var foreground = ForegroundCoverage.IsExternalApplicationForeground();
         var externalForeground = DockPresentationPolicy.EffectiveExternalForeground(
-            ForegroundCoverage.IsExternalApplicationForeground(), _settingsWindowVisible);
+            foreground && !_overlaySuppressedContext,
+            _settingsWindowVisible);
         var hasSwitcherContent = _switcherItems.Count > 0;
         var appIslandRequested = _fullscreenAppIslandEnabled && _fullscreenAppIslandContext
             && externalForeground && !_settingsWindowVisible && !_launcherContainerActive;
@@ -1550,18 +2155,25 @@ public partial class DockWindow : GlassWindow
         {
             SetRunningAppSwitcherRequested(false);
         }
+        var foregroundKind = _settingsWindowVisible ? DockForegroundKind.SecureDesktop
+            : _overlaySuppressedContext ? DockForegroundKind.Unknown
+            : foreground ? DockForegroundKind.ExternalApplication : DockForegroundKind.ShellDesktop;
         var mode = DockPresentationPolicy.Resolve(
-            _launcherContainerActive,
-            ForegroundCoverage.IsExternalApplicationForeground(),
-            fullscreen,
-            hasSwitcherContent,
-            _switcherRequested || _appIslandStateMachine.IsExpanded,
-            _settingsWindowVisible,
-            appIslandRequested);
+            new DockPresentationContext(
+                foregroundKind,
+                _taskbarAutoHiddenContext ? DockTaskbarKind.AutoHidden : DockTaskbarKind.Visible,
+                _overlaySuppressedContext ? DockFullscreenKind.Unknown
+                    : _exclusiveFullscreenContext ? DockFullscreenKind.Exclusive : DockFullscreenKind.NotExclusive,
+                _switcherRequested ? DockAwarenessRequest.Switcher
+                    : appIslandRequested && (_appIslandStateMachine.IsVisible || _appIslandStateMachine.IsExpanded)
+                        ? DockAwarenessRequest.CompactIsland : DockAwarenessRequest.None,
+                hasSwitcherContent,
+                _launcherContainerActive,
+                _settingsWindowVisible));
         ApplyPresentationMode(mode);
         UpdateSwitcherInventoryTimer(mode is DockPresentationMode.RunningAppIsland or DockPresentationMode.RunningAppSwitcher);
         UpdateIslandPowerRefreshTimer(mode is DockPresentationMode.RunningAppIsland or DockPresentationMode.RunningAppSwitcher);
-        UpdateAutoHideState(now, fullscreen, externalForeground, mode);
+        UpdateAutoHideState(now, fullscreen, mode, _overlaySuppressedContext);
 
         // 滑动插值：向目标滑出量靠近。
         var target = _autoHide.State == AutoHideState.Hidden
@@ -1579,27 +2191,12 @@ public partial class DockWindow : GlassWindow
 
         if (_settingsWindowVisible || ThemeService.Current?.AnimationsEnabled == false)
         {
-            _slideOffsetPixels = target;
-            ApplySlide(_restingRect,target);
+            SetSlideAnimationTarget(target, forceImmediate: true);
+            if (_frameTimer is not null) _frameTimer.Interval = TimeSpan.FromMilliseconds(100);
             NotifyPerformanceSurfaceVisibility();
             return;
         }
-        if (Math.Abs(_slideOffsetPixels - target) > 0.5)
-        {
-            _slideOffsetPixels += (target - _slideOffsetPixels) * 0.25;
-
-            if (Math.Abs(_slideOffsetPixels - target) <= 0.5)
-            {
-                _slideOffsetPixels = target;
-            }
-
-            ApplySlide(_restingRect, _slideOffsetPixels);
-        }
-        else if (_slideOffsetPixels != target)
-        {
-            _slideOffsetPixels = target;
-            ApplySlide(_restingRect, _slideOffsetPixels);
-        }
+        SetSlideAnimationTarget(target);
 
         if (_frameTimer is not null)
             _frameTimer.Interval = !_backgroundCaptureSleeping && _autoHide.Suppressed
@@ -1609,26 +2206,111 @@ public partial class DockWindow : GlassWindow
         NotifyPerformanceSurfaceVisibility();
     }
 
-    private void UpdateAutoHideState(DateTime now, bool fullscreen, bool externalForeground, DockPresentationMode mode)
+    private void SetSlideAnimationTarget(double target, bool forceImmediate = false)
+    {
+        _slideAnimationTargetPixels = target;
+        if (forceImmediate || Math.Abs(_slideOffsetPixels - target) <= .5)
+        {
+            var changed = Math.Abs(_slideOffsetPixels - target) > 0;
+            _slideOffsetPixels = target;
+            StopSlideRendering();
+            if (changed) ApplySlide(_restingRect, _slideOffsetPixels);
+            if (_performanceSleepRequested && _slideOffsetPixels == _fullyHiddenOffsetPixels)
+                FinishPerformanceSleep();
+            return;
+        }
+
+        if (_slideRenderingSubscribed) return;
+        _lastSlideRenderingTime = null;
+        _slideRenderingSubscribed = true;
+        CompositionTarget.Rendering += OnSlideRendering;
+    }
+
+    private void OnSlideRendering(object? sender, EventArgs e)
+    {
+        if (!IsLoaded || !IsVisible || _restingRect.Width <= 0)
+        {
+            StopSlideRendering();
+            return;
+        }
+
+        if (_performanceSleepRequested)
+            _slideAnimationTargetPixels = _fullyHiddenOffsetPixels;
+
+        var frameTime = ((RenderingEventArgs)e).RenderingTime;
+        var elapsed = _lastSlideRenderingTime is { } previous ? frameTime - previous : TimeSpan.Zero;
+        _lastSlideRenderingTime = frameTime;
+        _slideOffsetPixels = ThemeService.Current?.AnimationsEnabled == false || _settingsWindowVisible
+            ? _slideAnimationTargetPixels
+            : DockSlideInterpolator.Advance(_slideOffsetPixels, _slideAnimationTargetPixels, elapsed);
+        ApplySlide(_restingRect, _slideOffsetPixels);
+        NotifyPerformanceSurfaceVisibility();
+
+        if (Math.Abs(_slideOffsetPixels - _slideAnimationTargetPixels) > .5) return;
+        _slideOffsetPixels = _slideAnimationTargetPixels;
+        StopSlideRendering();
+        if (_performanceSleepRequested && _slideOffsetPixels == _fullyHiddenOffsetPixels)
+            FinishPerformanceSleep();
+    }
+
+    private void StopSlideRendering()
+    {
+        if (_slideRenderingSubscribed)
+            CompositionTarget.Rendering -= OnSlideRendering;
+        _slideRenderingSubscribed = false;
+        _lastSlideRenderingTime = null;
+    }
+
+    private void UpdateAutoHideState(
+        DateTime now,
+        bool fullscreen,
+        DockPresentationMode mode,
+        bool environmentSuppressed)
     {
         if (_autoHide is null) return;
-        if (_settingsWindowVisible)
+        if (_settingsWindowVisible || environmentSuppressed || mode == DockPresentationMode.Hidden
+            || fullscreen && mode == DockPresentationMode.DesktopDock)
         {
+            ResetKeyboardFocusMode();
             _autoHide.ForceHide(now);
         }
-        else if (_launcherContainerActive || !externalForeground
+        else if (_keyboardFocusMode || _launcherContainerActive
             || mode is DockPresentationMode.RunningAppSwitcher or DockPresentationMode.RunningAppIsland)
         {
             _autoHide.ForceShown(now);
         }
-        else if (fullscreen || externalForeground)
-        {
-            _autoHide.ForceHide(now);
-        }
-        else
+        else if (!Settings.AutoHide || !Settings.EdgeRevealEnabled || CurrentPrimaryDisplay is not { } display)
         {
             _autoHide.ForceShown(now);
         }
+        else
+        {
+            var pointer = DisplayService.GetCursorPixelPoint();
+            var overDock = pointer is { } point && _restingRect.Contains(point.X, point.Y);
+            var atRevealEdge = IsInDockRevealHotzone(pointer, display);
+
+            if (overDock || atRevealEdge)
+            {
+                _ = _autoHide.TryReveal(isCovered: fullscreen || environmentSuppressed, now);
+                _autoHide.PointerEnter(now);
+            }
+            else
+            {
+                _autoHide.PointerLeave(now);
+                _autoHide.Poll(now);
+            }
+        }
+    }
+
+    private bool IsInDockRevealHotzone((int X, int Y)? pointer, DisplayInfo display)
+    {
+        if (pointer is not { } point || _restingRect.Width <= 0) return false;
+        if (point.X < _restingRect.X || point.X >= _restingRect.Right) return false;
+
+        var hotzone = Math.Max(1, display.ToPixels(Settings.EdgeHotzoneSize));
+        return Settings.Placement == DockPlacement.TopCenter
+            ? point.Y >= _restingRect.Y && point.Y < _restingRect.Y + hotzone
+            : point.Y >= _restingRect.Bottom - hotzone && point.Y < _restingRect.Bottom;
     }
 
     private void ApplyPresentationMode(DockPresentationMode mode)
@@ -1897,6 +2579,7 @@ public partial class DockWindow : GlassWindow
         _switcherInventoryRefreshInProgress = true;
         var generation = Interlocked.Increment(ref _switcherInventoryGeneration);
         var running = _services.Running;
+        var includeTrayIcons = _showSwitcherTrayIcons;
         var ownProcessId = unchecked((uint)Environment.ProcessId);
         var entries = _services.Library.Items.Select(entry => new AppEntry
         {
@@ -1916,7 +2599,7 @@ public partial class DockWindow : GlassWindow
                 var windows = running.LastWindows.ToArray();
                 var processes = RunningBackgroundAppItems.EnumerateCurrentProcesses();
                 var background = RunningBackgroundAppItems.Create(entries, windows, processes, ownProcessId);
-                var tray = NotificationAreaAppItems.EnumerateAccessibleItems();
+                var tray = includeTrayIcons ? NotificationAreaAppItems.EnumerateAccessibleItems() : [];
                 return (background, tray);
             });
 
@@ -1998,7 +2681,7 @@ public partial class DockWindow : GlassWindow
                 IsPinnedApp: true));
         }
 
-        foreach (var item in _trayAppItems)
+        foreach (var item in _showSwitcherTrayIcons ? _trayAppItems : [])
         {
             var glyph = item.DisplayName.Length == 0 ? "·" : item.DisplayName[..1].ToUpperInvariant();
             refreshedItems.Add(new RunningAppTile(
@@ -2013,7 +2696,8 @@ public partial class DockWindow : GlassWindow
         }
 
         _switcherItems.ReplaceAll(refreshedItems);
-        UpdateSwitcherSummary(items.Count, _backgroundAppItems.Count, pinnedModels.Length, _trayAppItems.Count);
+        UpdateSwitcherSummary(items.Count, _backgroundAppItems.Count, pinnedModels.Length,
+            _showSwitcherTrayIcons ? _trayAppItems.Count : 0);
     }
 
     private void UpdateSwitcherSummary(int windowCount, int backgroundCount, int pinnedCount, int trayCount)
@@ -2131,7 +2815,7 @@ public partial class DockWindow : GlassWindow
     {
         if (!_fullscreenAppIslandEnabled || !_fullscreenAppIslandContext || _settingsWindowVisible
             || !ForegroundCoverage.IsExternalApplicationForeground()) return;
-        if (!_switcherRequested) _appIslandStateMachine.PointerEntered();
+        if (!_switcherRequested && _expandAppIslandOnHover) _appIslandStateMachine.PointerEntered();
         _appIslandHoverCollapseTimer?.Stop();
         WakeSwitcherFrame();
     }
@@ -2199,6 +2883,11 @@ public partial class DockWindow : GlassWindow
 
         RefreshDiagnostics();
 
+        // Explorer broadcasts work-area changes to top-level windows. Reconcile
+        // after the message is processed so the Dock observes the settled metrics.
+        _shellPlacementSource = HwndSource.FromHwnd(Handle);
+        _shellPlacementSource?.AddHook(OnShellGeometryMessage);
+
         // 必须在句柄建立之后改扩展样式：点击本窗口时不得把前台让给别人。
         // 弹出物要取焦点时显式调 WindowActivation.TryBringToForeground。
         WindowStyles.MakeNoActivate(Handle);
@@ -2213,6 +2902,13 @@ public partial class DockWindow : GlassWindow
 
     protected override void OnClosed(EventArgs e)
     {
+        _dockIconLoadsDisposed = true;
+        if (_shellPlacementSource is not null)
+        {
+            _shellPlacementSource.RemoveHook(OnShellGeometryMessage);
+            _shellPlacementSource = null;
+        }
+        StopSlideRendering();
         _frameTimer?.Stop();
         _switcherInventoryTimer?.Stop();
         _appIslandHoverCollapseTimer?.Stop();
@@ -2240,9 +2936,18 @@ public partial class DockWindow : GlassWindow
         if (_services is not null)
         {
             _services.Running.Changed -= OnRunningChanged;
+            _services.Running.ForegroundApplicationChanged -= OnForegroundApplicationChanged;
         }
 
         base.OnClosed(e);
+    }
+
+    private nint OnShellGeometryMessage(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
+    {
+        if (!ShellPlacementMessageFilter.ShouldReconcile(message, wParam)) return 0;
+        if (!Dispatcher.HasShutdownStarted && IsLoaded)
+            Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(ReconcileShellPlacement));
+        return 0;
     }
 
     protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)

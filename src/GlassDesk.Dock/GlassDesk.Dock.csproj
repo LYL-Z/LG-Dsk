@@ -18,4 +18,11 @@
     <ProjectReference Include="..\GlassDesk.UI\GlassDesk.UI.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Resource Include="Assets\UserReference\finder-icon.png" />
+    <Resource Include="Assets\UserReference\settings-icon.png" />
+    <Resource Include="Assets\UserReference\downloads-icon.png" />
+    <Resource Include="Assets\UserReference\trash-icon.png" />
+  </ItemGroup>
+
 </Project>

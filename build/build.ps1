@@ -19,11 +19,12 @@ param(
     [switch]$SkipAcceptance,
     # Phase 3/4 can start or activate applications and create visible windows; default is off.
     [switch]$InteractiveAcceptance,
+    # UI acceptance also creates production WPF windows and uses real cursor coordinates.
     [switch]$UiAcceptance,
     # Desktop acceptance injects REAL mouse and keyboard events through SendInput, so it is
-    # only allowed on an isolated desktop: a dedicated test account or a virtual machine.
-    # It refuses to send anything unless GLASSDESK_ISOLATED_DESKTOP=1 is set, and that
-    # refusal is a blocked run (exit code 2), never a pass.
+    # only allowed on the active, explicitly named LGDsk-Acceptance-... Win32 desktop.
+    # GLASSDESK_ISOLATED_DESKTOP=1 is also required, but the flag alone never enables it.
+    # Refusal is a blocked run (exit code 2), never a pass.
     [switch]$DesktopAcceptance,
     [int]$DesktopRepeat = 3,
     [string]$DesktopReport,
@@ -38,6 +39,11 @@ $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+
+$desktopGuardType = 'GlassDesk.Acceptance.DesktopIsolationGuard' -as [type]
+if ($null -eq $desktopGuardType) {
+    Add-Type -Path (Join-Path $repoRoot 'tests/GlassDesk.LauncherAcceptance/DesktopIsolationGuard.cs')
+}
 
 function Resolve-Dotnet {
     param([string]$Explicit)
@@ -73,23 +79,23 @@ function Get-TestProjects {
 
 function Test-DesktopAcceptanceAllowed {
     param([switch]$DesktopAcceptance, [string]$IsolationFlag)
-    return (-not $DesktopAcceptance -or $IsolationFlag -eq '1')
+    return (-not $DesktopAcceptance -or ($IsolationFlag -eq '1' -and [GlassDesk.Acceptance.DesktopIsolationGuard]::IsActiveAcceptanceDesktop()))
 }
 
 function Test-InteractiveAcceptanceAllowed {
     param([switch]$InteractiveAcceptance, [string]$IsolationFlag)
-    return ($InteractiveAcceptance -and $IsolationFlag -eq '1')
+    return ($InteractiveAcceptance -and $IsolationFlag -eq '1' -and [GlassDesk.Acceptance.DesktopIsolationGuard]::IsActiveAcceptanceDesktop())
 }
 
 if (-not (Test-DesktopAcceptanceAllowed -DesktopAcceptance:$DesktopAcceptance -IsolationFlag:$env:GLASSDESK_ISOLATED_DESKTOP)) {
     Write-Host 'Blocked: desktop acceptance needs an isolated desktop.' -ForegroundColor Yellow
-    Write-Host 'Run it inside the test virtual machine and set GLASSDESK_ISOLATED_DESKTOP=1 first.' -ForegroundColor Yellow
+    Write-Host 'Run it on the active LGDsk-Acceptance-... input desktop and set GLASSDESK_ISOLATED_DESKTOP=1; an environment flag alone is insufficient.' -ForegroundColor Yellow
     exit 2
 }
 
-if ($InteractiveAcceptance -and -not (Test-InteractiveAcceptanceAllowed -InteractiveAcceptance:$InteractiveAcceptance -IsolationFlag:$env:GLASSDESK_ISOLATED_DESKTOP)) {
-    Write-Host 'Blocked: Phase 3/4 acceptance needs an isolated desktop.' -ForegroundColor Yellow
-    Write-Host 'Pass -InteractiveAcceptance inside the test virtual machine with GLASSDESK_ISOLATED_DESKTOP=1.' -ForegroundColor Yellow
+if (($InteractiveAcceptance -or $UiAcceptance) -and -not (Test-InteractiveAcceptanceAllowed -InteractiveAcceptance:$true -IsolationFlag:$env:GLASSDESK_ISOLATED_DESKTOP)) {
+    Write-Host 'Blocked: interactive/UI acceptance needs an isolated desktop.' -ForegroundColor Yellow
+    Write-Host 'Run it on the active LGDsk-Acceptance-... input desktop with GLASSDESK_ISOLATED_DESKTOP=1.' -ForegroundColor Yellow
     exit 2
 }
 

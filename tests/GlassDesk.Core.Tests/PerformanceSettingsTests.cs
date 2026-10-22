@@ -43,6 +43,32 @@ public sealed class PerformanceSettingsTests
         Assert.True(Read(clone));
     }
 
+    [Fact]
+    public void IslandPreferencesDefaultForLegacySettingsAndResetIndependently()
+    {
+        using var temp = new TempDataDirectory();
+        File.WriteAllText(temp.Paths.SettingsFile,
+            "{\"schemaVersion\":1,\"performance\":{\"autoSuspendWhenFullscreen\":false,\"showFullscreenAppIsland\":false},\"dock\":{\"offsetX\":25}}");
+        var store = new SettingsStore(temp.Paths.SettingsFile);
+        store.Load();
+
+        Assert.False(store.Current.Performance.ShowFullscreenAppIsland);
+        Assert.True(store.Current.Performance.ExpandIslandOnHover);
+        Assert.True(store.Current.Performance.ShowTrayIcons);
+        store.Save();
+        var reloaded = new SettingsStore(temp.Paths.SettingsFile);
+        reloaded.Load();
+        Assert.True(reloaded.Current.Performance.ExpandIslandOnHover);
+        Assert.True(reloaded.Current.Performance.ShowTrayIcons);
+
+        var reset = SettingsPageEditor.ResetPage(reloaded.Current, "应用岛");
+        Assert.True(reset.Performance.ShowFullscreenAppIsland);
+        Assert.True(reset.Performance.ExpandIslandOnHover);
+        Assert.True(reset.Performance.ShowTrayIcons);
+        Assert.False(reset.Performance.AutoSuspendWhenFullscreen);
+        Assert.Equal(25, reset.Dock.OffsetX);
+    }
+
     private static bool Read(GlassDeskSettings settings)
     {
         var property = typeof(GlassDeskSettings).GetProperty("Performance");

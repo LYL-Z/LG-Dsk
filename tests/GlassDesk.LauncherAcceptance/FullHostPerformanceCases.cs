@@ -22,12 +22,8 @@ internal static partial class Program
     // Memory/CPU/GPU are sampled externally. No GC collection, working-set trim or per-frame counter queries.
     private static int VerifyFullHostPerformance(string[] args)
     {
-        var directory = Path.GetFullPath(AppContext.BaseDirectory);
-        var marker = Path.Combine(directory, ".full-host-acceptance-root");
-        if (!File.Exists(marker) || File.ReadAllText(marker).Trim() != directory)
-            throw new InvalidOperationException("Full-host acceptance requires an explicitly marked test package.");
-        if (!Directory.Exists(Path.Combine(directory, "Data")))
-            throw new InvalidOperationException("A staged, copied Data profile is required.");
+        if (!TryRequireIsolatedFullHostPackage(out var directory, out var refusal))
+            return RefuseFullHostAcceptance(refusal);
         var report = Path.GetFullPath(Argument(args, "--report") ?? throw new ArgumentException("--report required"));
         var evidence = Path.GetDirectoryName(report)!;
         var phaseFile = Path.GetFullPath(Argument(args, "--phase-file") ?? Path.Combine(evidence, "phase.txt"));

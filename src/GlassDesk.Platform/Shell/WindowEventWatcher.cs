@@ -45,6 +45,7 @@ public sealed class WindowEventWatcher : IDisposable
 
     private readonly Action? _onChanged;
     private readonly Action<uint, nint, int, int>? _onRawEvent;
+    private readonly Action<nint>? _onForegroundWindowChanged;
     private readonly ManualResetEventSlim _ready = new(false);
     private readonly Thread _hookThread;
     private readonly List<nint> _hooks = [];
@@ -55,13 +56,18 @@ public sealed class WindowEventWatcher : IDisposable
 
     private Timer? _coalesceTimer;
     private uint _threadId;
+    private nint _pendingForegroundWindow;
     private bool _hooksInstalled;
     private volatile bool _disposed;
 
-    private WindowEventWatcher(Action? onChanged, Action<uint, nint, int, int>? onRawEvent)
+    private WindowEventWatcher(
+        Action? onChanged,
+        Action<uint, nint, int, int>? onRawEvent,
+        Action<nint>? onForegroundWindowChanged)
     {
         _onChanged = onChanged;
         _onRawEvent = onRawEvent;
+        _onForegroundWindowChanged = onForegroundWindowChanged;
         _callback = OnWinEvent;
         _hookThread = new Thread(HookThreadMain)
         {
@@ -85,9 +91,12 @@ public sealed class WindowEventWatcher : IDisposable
     /// （事件类型、窗口句柄、OBJID、子 id）。在<strong>钩子线程</strong>上触发，
     /// 实现必须轻（记录一条日志的量级），绝不能在这里做查询或碰界面。
     /// </param>
-    public static WindowEventWatcher? TryStart(Action? onChanged, Action<uint, nint, int, int>? onRawEvent = null)
+    public static WindowEventWatcher? TryStart(
+        Action? onChanged,
+        Action<uint, nint, int, int>? onRawEvent = null,
+        Action<nint>? onForegroundWindowChanged = null)
     {
-        var watcher = new WindowEventWatcher(onChanged, onRawEvent);
+        var watcher = new WindowEventWatcher(onChanged, onRawEvent, onForegroundWindowChanged);
 
         if (watcher.Start())
         {
@@ -227,6 +236,9 @@ public sealed class WindowEventWatcher : IDisposable
             return;
         }
 
+        if (eventType == User32.EventSystemForeground)
+            _ = Interlocked.Exchange(ref _pendingForegroundWindow, window);
+
         // 诊断旁路在钩子线程上直呼——调用方契约要求它轻。
         try
         {
@@ -274,6 +286,17 @@ public sealed class WindowEventWatcher : IDisposable
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // 调用方的重算失败不拖垮事件源本身。
+            _ = ex;
+        }
+
+        var foregroundWindow = Interlocked.Exchange(ref _pendingForegroundWindow, 0);
+        if (foregroundWindow == 0) return;
+        try
+        {
+            _onForegroundWindowChanged?.Invoke(foregroundWindow);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
             _ = ex;
         }
     }

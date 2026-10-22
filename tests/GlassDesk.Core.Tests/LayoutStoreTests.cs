@@ -177,6 +177,43 @@ public sealed class LayoutStoreTests : IDisposable
     }
 
     [Fact]
+    public void RecordRecentApplication_PersistsThreeUnpinnedAppsInMostRecentOrder()
+    {
+        var store = CreateStore();
+        store.Dock.PinnedItemIds.Add("pinned");
+        store.SaveDock();
+
+        Assert.True(store.RecordRecentApplication("app-a"));
+        Assert.True(store.RecordRecentApplication("app-b"));
+        Assert.True(store.RecordRecentApplication("app-c"));
+        Assert.True(store.RecordRecentApplication("app-d"));
+        Assert.False(store.RecordRecentApplication("pinned"));
+        Assert.True(store.RecordRecentApplication("app-b"));
+
+        var reloaded = CreateStore();
+        reloaded.LoadDock();
+        Assert.Equal(["app-b", "app-d", "app-c"], reloaded.Dock.RecentApplicationIds);
+    }
+
+    [Fact]
+    public void RecordRecentApplication_SaveFailureRestoresLastPersistedRecents()
+    {
+        var store = CreateStore();
+        Assert.True(store.RecordRecentApplication("app-a"));
+
+        using (var blocker = new FileStream(
+            store.DockFilePath + AtomicFile.TempSuffix,
+            FileMode.Create,
+            FileAccess.ReadWrite,
+            FileShare.None))
+        {
+            Assert.Throws<StorageException>(() => store.RecordRecentApplication("app-b"));
+        }
+
+        Assert.Equal(["app-a"], store.Dock.RecentApplicationIds);
+    }
+
+    [Fact]
     public void SaveDock失败时共享布局恢复到上次已保存顺序()
     {
         var store = CreateStore();

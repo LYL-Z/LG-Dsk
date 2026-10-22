@@ -4,7 +4,7 @@
 
 ![LG Dsk 图标预览](docs/assets/lg-dsk-icon-preview.png)
 
-![版本](https://img.shields.io/github/v/release/LYL-Z/LG-Dsk?sort=semver) ![平台](https://img.shields.io/badge/platform-Windows%2011%20x64-0078D4) ![运行时](https://img.shields.io/badge/runtime-.NET%2010-512BD4) ![许可证](https://img.shields.io/github/license/LYL-Z/LG-Dsk) ![Stars](https://img.shields.io/github/stars/LYL-Z/LG-Dsk) ![下载量](https://img.shields.io/github/downloads/LYL-Z/LG-Dsk/total) ![贡献者](https://img.shields.io/github/contributors/LYL-Z/LG-Dsk) ![CI](https://img.shields.io/badge/CI-not%20configured-lightgrey) ![覆盖率](https://img.shields.io/badge/coverage-not%20measured-lightgrey) ![安全扫描](https://img.shields.io/badge/security%20scan-not%20run-lightgrey)
+![版本](https://img.shields.io/github/v/release/LYL-Z/LG-Dsk?sort=semver) ![平台](https://img.shields.io/badge/platform-Windows%2011%20x64-0078D4) ![运行时](https://img.shields.io/badge/runtime-.NET%2010-512BD4) ![许可证](https://img.shields.io/github/license/LYL-Z/LG-Dsk) ![Stars](https://img.shields.io/github/stars/LYL-Z/LG-Dsk) ![下载量](https://img.shields.io/github/downloads/LYL-Z/LG-Dsk/total) ![贡献者](https://img.shields.io/github/contributors/LYL-Z/LG-Dsk) ![CI](https://img.shields.io/badge/CI-workflow%20added-lightgrey) ![覆盖率](https://img.shields.io/badge/coverage-not%20measured-lightgrey) ![安全扫描](https://img.shields.io/badge/security%20scan-not%20independently%20audited-lightgrey)
 
 > **玻璃留下，干扰退后，切换随手。**
 
@@ -14,13 +14,13 @@ LG Dsk 是公开维护的单用户 Windows 桌面程序，不是系统任务栏�
 
 | 指标 | 当前状态 |
 | --- | --- |
-| 发布版本 | LG Dsk 1.5.0（应用岛活动仲裁、系统音量/电源反馈与单调倒计时） |
+| 当前候选 | LG Dsk 1.6.0（本地候选，尚未发布；基于 1.5.0） |
 | 目标平台 | Windows 11 x64，Build 22000 及以上 |
 | 主要技术 | C#、WPF、.NET 10、Windows API |
 | 许可证 | Apache License 2.0；第三方资源遵循各自许可 |
-| CI/CD | 未配置自动化流水线；本地 Release 构建已通过 |
+| CI/CD | 已添加 Windows Release 工作流并固定 Action 提交 SHA；远端 GitHub 运行尚未取得 |
 | 测试覆盖率 | 未测量；不发布覆盖率徽章或百分比 |
-| 安全扫描 | 未运行独立依赖漏洞或静态安全扫描 |
+| 安全扫描 | 当前 NuGet 源的依赖公告扫描未报告已知漏洞；独立安全审计未完成 |
 | Docker / Kubernetes | 不适用于本地 Windows 桌面程序 |
 | Stars、下载量、贡献者 | 由 GitHub 徽章动态读取；随仓库活动变化 |
 | Issue 响应 SLA | 未承诺；由单人维护者按能力处理 |
@@ -29,7 +29,7 @@ LG Dsk 是公开维护的单用户 Windows 桌面程序，不是系统任务栏�
 
 ### 当前版本说明
 
-1.5.0 的逐项改动与验证边界见[版本说明](docs/RELEASE-NOTES-LG-Dsk-1.5.0.md)。每个发布版本都会附独立的变更说明和安装资产校验和。
+1.6.0 的本地候选改动与验证边界见[版本说明](docs/RELEASE-NOTES-LG-Dsk-1.6.0.md)。页面上的 GitHub Release 版本徽章反映远端公开版本；本地候选尚未发布。发布资产会附独立变更说明和 SHA-256 清单。
 
 ### 背景与痛点 Background & Pain Points
 
@@ -291,7 +291,7 @@ var mode = DockPresentationPolicy.Resolve(
 | 发布 | `win-x64`、Self-contained、ReadyToRun | 减少目标机运行时前置条件 |
 | 安装器 | Inno Setup 7.1.0（本次实际编译器） | 生成中文用户级单文件安装包 |
 | 测试 | xUnit 测试项目与 Windows 桌面验收工程 | 分离纯逻辑测试和依赖交互桌面的验收 |
-| CI/可观测性 | 未配置 GitHub Actions、OpenTelemetry 或集中日志 | 本项目是本地应用；当前没有服务端运营面 |
+| CI/可观测性 | 已新增固定提交 SHA 的 Windows Actions 构建与自动化测试；没有远端运行结果、OpenTelemetry 或集中日志 | 本地应用没有服务端运营面 |
 
 `global.json` 指定 .NET SDK 10.0.401，并允许同一功能带内滚动。源项目 SDK 目标为 Windows 10.0.26100.0，安装包运行兼容下限为 Windows 11 Build 22000；这些是不同概念。高级玻璃效果涉及部分未公开 DWM 能力，具体可用性按系统能力判断并降级。
 
@@ -305,14 +305,14 @@ var mode = DockPresentationPolicy.Resolve(
 | --- | --- | --- |
 | 活跃动画调度 | 16 ms 配置间隔 | 源码参数；非实测帧率 |
 | 静止检查间隔 | 100 ms 配置间隔 | 源码参数；非耗电数据 |
-| Core 自动化测试 | 174/174 通过 | 本地 .NET 10 Release 测试；含活动仲裁与计时状态 |
-| AppServices 自动化测试 | 389/389 通过 | 含更新断点续传、电源状态与音量标签格式测试 |
-| Dock 自动化测试 | 503/503 通过 | 含应用岛呈现、固定/后台/托盘项目和任务栏区域定位 |
+| Core 自动化测试 | 194/194 通过 | 本地 .NET 10 Release 测试 |
+| AppServices 自动化测试 | 417/417 通过 | 本地 .NET 10 Release 测试 |
+| Dock 自动化测试 | 521/521 通过；原生捕获恢复用例另在隔离桌面 1/1 通过 | 两次独立运行，不是一次全套运行 |
 | 完整 Release 构建 | 0 警告、0 错误 | 本地 .NET 10.0.401 |
-| 安装器与便携 ZIP | 已编译并通过 `verify-package.ps1` | x64，自包含发布 |
-| NuGet 漏洞扫描 | 未发现易受攻击依赖 | 当前配置的 NuGet 源 |
+| 安装器与便携 ZIP | 1.6.0 本地候选已编译；`verify-package.ps1` 校验通过 | x64、自包含；安装器未签名，尚未发布 |
+| NuGet 漏洞公告扫描 | 当前 NuGet 源所检查的 17 个项目均未报告已知易受攻击包 | 不等同独立安全审计 |
 
-这些结果是本地自动化、Release 构建与安装包校验。详细记录见[1.5.0 版本说明](docs/RELEASE-NOTES-LG-Dsk-1.5.0.md)。真实交互安装、持续断网恢复、托盘图标覆盖率及 RTX 5090 实机验收仍需在目标 Windows 桌面完成。
+这些结果是本地自动化、Release 构建与候选包校验。详细记录见[1.6.0 本地候选说明](docs/RELEASE-NOTES-LG-Dsk-1.6.0.md)。目标设备的真实视觉、安装升级/回滚、全屏和睡眠恢复、多屏 DPI、高刷/HDR、宠物遮挡及长稳仍未完成；硬件性能百分位没有实测。
 
 ### 横向/纵向对比
 

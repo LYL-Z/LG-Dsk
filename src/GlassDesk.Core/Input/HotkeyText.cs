@@ -2,7 +2,7 @@ using GlassDesk.Core.Models.Settings;
 
 namespace GlassDesk.Core.Input;
 
-public enum InputAction { None, ToggleLauncher, HideLauncher, NextPage, PreviousPage, ToggleDesktopIcons, ToggleRunningAppSwitcher }
+public enum InputAction { None, ToggleLauncher, HideLauncher, NextPage, PreviousPage, ToggleDesktopIcons, ToggleRunningAppSwitcher, FocusDock }
 public readonly record struct HotkeyChord(uint Modifiers, uint VirtualKey);
 
 public static class HotkeyText
@@ -94,5 +94,6 @@ public static class HotkeyText
         yield return (InputAction.PreviousPage, settings.PreviousPage);
         yield return (InputAction.ToggleDesktopIcons, settings.ToggleDesktopIcons);
         yield return (InputAction.ToggleRunningAppSwitcher, settings.ToggleRunningAppSwitcher);
+        yield return (InputAction.FocusDock, settings.FocusDock);
     }
 }

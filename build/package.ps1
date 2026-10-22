@@ -302,6 +302,7 @@ try {
     $releaseNotes = if ($ReleaseNotesPath) { $ReleaseNotesPath } else { Join-Path $repoRoot "docs/RELEASE-NOTES-LG-Dsk-$ProductVersion.md" }
     if (-not (Test-Path -LiteralPath $releaseNotes -PathType Leaf)) { throw "Versioned release notes are missing: '$releaseNotes'." }
     Copy-Item -LiteralPath $releaseNotes -Destination (Join-Path $stageDirectory 'RELEASE-NOTES.md') -Force
+    Set-Content -LiteralPath (Join-Path $stageDirectory 'portable.flag') -Value 'LG Dsk portable deployment marker' -Encoding ASCII
     if (-not $DotnetRoot) { $DotnetRoot = Join-Path $repoRoot 'docs/third-party/dotnet-10.0.12' }
     Assert-RequiredLicenseSources -DotnetRoot $DotnetRoot -Stage $stageDirectory -RepositoryRoot $repoRoot
 
@@ -339,8 +340,7 @@ try {
     }
     $toolchain = [ordered]@{
         schemaVersion = 1; sdkVersion = $sdkVersion; runtimeVersion = $runtimeVersion
-        innoVersion = $compilerVersion; innoCompilerPath = $compiler
-        innoCompilerSha256 = Get-Sha256HexFromFile $compiler
+        innoVersion = $compilerVersion; innoCompilerSha256 = Get-Sha256HexFromFile $compiler
     }
     $toolchainPath = Join-Path $outputFullPath 'toolchain.json'
     $toolchain | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $toolchainPath -Encoding UTF8
@@ -348,7 +348,7 @@ try {
     $report = [ordered]@{
         schemaVersion = 1; productName = 'LG Dsk'; productVersion = $ProductVersion
         assemblyVersion = $assemblyVersion; fileVersion = $fileVersion; appId = $appId
-        rid = 'win-x64'; status = 'Built'; packageDirectory = $outputFullPath
+        rid = 'win-x64'; status = 'Built'; packageBaseName = $packageBaseName
     }
     $reportPath = Join-Path $outputFullPath 'build-report.json'
     $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $reportPath -Encoding UTF8

@@ -49,20 +49,26 @@ public sealed class GlassDeskSettings
         Performance ??= new PerformanceSettings();
         DesktopTaskbar ??= new DesktopTaskbarSettings();
         Updates ??= new UpdateSettings();
-        Dock.AutoHide = false;
-        Dock.EdgeRevealEnabled = false;
         Launcher.FullscreenMode = false;
         Shortcuts.HotCornersEnabled = false;
         Shortcuts.MouseSideButtonsEnabled = false;
 
-        // Keep legacy enum values readable, but product settings have one appearance.
-        Appearance.Theme = ThemeMode.Dark;
+        if (!Enum.IsDefined(Appearance.Theme)) Appearance.Theme = ThemeMode.System;
         if (Appearance.GlassMaterial != GlassMaterialMode.FrostedGlass)
             Appearance.GlassMaterial = GlassMaterialMode.AndroidLiquidGlass;
         Dock.SizeScale = double.IsFinite(Dock.SizeScale)
             ? Math.Clamp(Dock.SizeScale, DockSettings.MinimumSizeScale, DockSettings.MaximumSizeScale) : 1;
-        // Settings now owns its opaque surface instead of changing every window.
-        Appearance.ReduceTransparency = false;
+        Dock.IconSize = double.IsFinite(Dock.IconSize) ? Math.Clamp(Dock.IconSize, 32, 96) : DockSettings.FixedIconSize;
+        Dock.IconSpacing = double.IsFinite(Dock.IconSpacing) ? Math.Clamp(Dock.IconSpacing, 0, 24) : DockSettings.FixedIconSpacing;
+        Dock.MagnificationPeak = double.IsFinite(Dock.MagnificationPeak)
+            ? Math.Clamp(Dock.MagnificationPeak, 1, 2) : DockSettings.FixedMagnificationPeak;
+        Dock.RecentApplicationsLimit = Math.Clamp(Dock.RecentApplicationsLimit, 0, 3);
+        if (!Enum.IsDefined(Dock.FolderStackViewMode))
+            Dock.FolderStackViewMode = DockFolderStackViewMode.Grid;
+        if (!Enum.IsDefined(Dock.FolderStackSortMode))
+            Dock.FolderStackSortMode = DockFolderStackSortMode.Name;
+        Dock.AutoHideLeaveDelayMs = Math.Clamp(Dock.AutoHideLeaveDelayMs, 0, 3000);
+        Dock.EdgeHotzoneSize = Math.Clamp(Dock.EdgeHotzoneSize, 1, 64);
         Appearance.DockGlassTransparency = double.IsFinite(Appearance.DockGlassTransparency)
             ? Math.Clamp(Appearance.DockGlassTransparency, 0, 1) : AppearanceSettings.DefaultDockGlassTransparency;
         Appearance.LauncherGlassTransparency = double.IsFinite(Appearance.LauncherGlassTransparency)

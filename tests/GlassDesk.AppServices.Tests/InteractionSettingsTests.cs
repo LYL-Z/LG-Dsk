@@ -85,6 +85,60 @@ public sealed class InteractionSettingsTests
         Assert.Empty(fixture.Registry.Items);
     }
 
+    [Fact]
+    public void FailedToUnregisterOldHotkeyKeepsItDisabledAndRetriesOnNextApply()
+    {
+        using var fixture = new Fixture();
+        Assert.Null(fixture.Service.Apply(Bound("Q"), new()));
+        var staleId = fixture.Registry.Items.Single().Key;
+        fixture.Registry.RefuseUnregisterIds.Add(staleId);
+
+        Assert.Null(fixture.Service.Apply(Bound("W"), new()));
+
+        Assert.Equal("W", fixture.Data.Settings.Current.Shortcuts.ToggleLauncher.Key);
+        Assert.Equal(InputAction.None, fixture.Service.ResolveAction(staleId));
+        Assert.NotNull(fixture.Service.LastWarning);
+        var activeId = fixture.Registry.Items.Single(pair => pair.Value.VirtualKey == 'W').Key;
+        Assert.Equal(InputAction.ToggleLauncher, fixture.Service.ResolveAction(activeId));
+
+        fixture.Registry.RefuseUnregisterIds.Clear();
+        Assert.Null(fixture.Service.Apply(Bound("W"), new()));
+
+        Assert.DoesNotContain(staleId, fixture.Registry.Items.Keys);
+        Assert.Null(fixture.Service.LastWarning);
+    }
+
+    [Fact]
+    public void FailedSaveWithUnreleasedNewHotkeyKeepsItDisabledForCleanupRetry()
+    {
+        using var fixture = new Fixture();
+        Assert.Null(fixture.Service.Apply(Bound("Q"), new()));
+        var originalBytes = File.ReadAllBytes(fixture.Data.Settings.FilePath);
+        var leakedKey = (uint)'R';
+        fixture.Registry.RefuseUnregisterKeys.Add(leakedKey);
+        string? error;
+        using (File.Open(fixture.Data.Settings.FilePath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            var candidate = new ShortcutSettings
+            {
+                ToggleLauncher = Bound("R").ToggleLauncher,
+                ToggleRunningAppSwitcher = new(),
+            };
+            error = fixture.Service.Apply(candidate, new());
+        }
+
+        Assert.Contains("保存失败", error, StringComparison.Ordinal);
+        Assert.Contains("旧快捷键", error, StringComparison.Ordinal);
+        Assert.Equal("Q", fixture.Data.Settings.Current.Shortcuts.ToggleLauncher.Key);
+        Assert.Equal(originalBytes, File.ReadAllBytes(fixture.Data.Settings.FilePath));
+        var staleId = Assert.Single(fixture.Registry.Items, pair => pair.Value.VirtualKey == leakedKey).Key;
+        Assert.Equal(InputAction.None, fixture.Service.ResolveAction(staleId));
+
+        fixture.Registry.RefuseUnregisterKeys.Clear();
+        Assert.Null(fixture.Service.Apply(Bound("Q"), new()));
+        Assert.DoesNotContain(staleId, fixture.Registry.Items.Keys);
+    }
+
     private static ShortcutSettings Bound(string key) => new()
     {
         ToggleLauncher = new() { Enabled = true, Control = true, Alt = true, Key = key },
@@ -93,6 +147,8 @@ public sealed class InteractionSettingsTests
     private sealed class Registry : IHotkeyRegistry
     {
         public readonly Dictionary<int, HotkeyChord> Items = [];
+        public readonly HashSet<int> RefuseUnregisterIds = [];
+        public readonly HashSet<uint> RefuseUnregisterKeys = [];
         public uint RejectKey;
         public bool TryRegister(int id, HotkeyChord chord, out int errorCode)
         {
@@ -100,7 +156,9 @@ public sealed class InteractionSettingsTests
             if (chord.VirtualKey == RejectKey || Items.ContainsValue(chord)) return false;
             Items.Add(id, chord); errorCode = 0; return true;
         }
-        public bool Unregister(int id) => Items.Remove(id);
+        public bool Unregister(int id) => !RefuseUnregisterIds.Contains(id)
+            && (!Items.TryGetValue(id, out var chord) || !RefuseUnregisterKeys.Contains(chord.VirtualKey))
+            && Items.Remove(id);
         public void Dispose() => Items.Clear();
     }
     private sealed class Fixture : IDisposable

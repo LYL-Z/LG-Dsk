@@ -42,8 +42,8 @@
     <Style x:Key="LauncherAppTile" TargetType="Button">
       <Setter Property="Foreground" Value="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
       <Setter Property="Cursor" Value="Hand" />
-      <Setter Property="Focusable" Value="False" />
-      <Setter Property="IsTabStop" Value="False" />
+      <Setter Property="Focusable" Value="True" />
+      <Setter Property="IsTabStop" Value="True" />
       <Setter Property="FocusVisualStyle" Value="{x:Null}" />
       <Setter Property="HorizontalContentAlignment" Value="Center" />
       <Setter Property="VerticalContentAlignment" Value="Center" />
@@ -57,6 +57,10 @@
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="TileChrome" Property="Background" Value="#10FFFFFF" /></Trigger>
               <Trigger Property="IsPressed" Value="True"><Setter TargetName="TileChrome" Property="Background" Value="#18FFFFFF" /></Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter TargetName="TileChrome" Property="BorderBrush" Value="{Binding AccentBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+                <Setter TargetName="TileChrome" Property="BorderThickness" Value="1" />
+              </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
         </Setter.Value>
@@ -128,7 +132,8 @@
             </UniformGrid>
           </ScrollViewer>
           <ScrollViewer x:Name="PageScroll" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Hidden">
-            <UniformGrid x:Name="TileGrid" MaxWidth="1120" HorizontalAlignment="Center">
+            <UniformGrid x:Name="TileGrid" MaxWidth="1120" HorizontalAlignment="Center"
+                         KeyboardNavigation.DirectionalNavigation="Contained">
               <UniformGrid.RenderTransform><TranslateTransform x:Name="IncomingPageMotion" /></UniformGrid.RenderTransform>
             </UniformGrid>
           </ScrollViewer>

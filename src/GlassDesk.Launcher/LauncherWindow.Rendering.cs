@@ -141,7 +141,9 @@ public partial class LauncherWindow
             BorderThickness = new Thickness(1),
         };
         System.Windows.Automation.AutomationProperties.SetName(button, missing ? $"{title}，目标已失效" : title);
+        System.Windows.Automation.AutomationProperties.SetHelpText(button, "Tab 键可聚焦；使用方向键选择，Enter 或空格键打开。");
         button.Click += (_, _) => OnTileActivated(slot);
+        button.PreviewKeyDown += OnTilePreviewKeyDown;
         if (!isGroup && _view.OpenGroupId is null)
         {
             button.PreviewMouseLeftButtonDown += OnTileMouseDown;

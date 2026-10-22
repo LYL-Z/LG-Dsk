@@ -10,11 +10,8 @@ public readonly record struct TileGeometry(double Center, double Scale);
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>槽位模型：固定槽位。</b>未放大时每个磁贴的中心位置固定；指针附近的磁贴
-/// 原地放大（四向膨胀），把相邻磁贴压在身下。两种候选模型曾在修订计划里对比：
-/// 动态排布（相邻磁贴被推开）不重叠、但指针移动时整行都在动，拖拽与点击的
-/// 落点随之漂移；固定槽位下未放大槽位是常量，命中区域虽有重叠，按「视觉即所得」
-/// 规则归属即可。两条路线的取舍已经确认（见阶段 4 计划修订 3）。
+/// <b>连续排布。</b>缩放由指针到静止槽位的距离连续计算，再按每枚图标的实际宽度
+/// 排布整行，邻居会自然让位。画布长度固定为峰值所需空间，放大时不扩窗也不裁切。
 /// </para>
 ///
 /// <para>
@@ -33,6 +30,17 @@ public readonly record struct TileGeometry(double Center, double Scale);
 /// </remarks>
 public static class DockMagnification
 {
+    /// <summary>Returns the smooth distance-to-scale curve shared across Dock entries.</summary>
+    public static double ScaleAtDistance(double distance, double iconSize, double spacing, double peak)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(distance);
+        ArgumentOutOfRangeException.ThrowIfLessThan(iconSize, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(spacing, 0);
+        ArgumentOutOfRangeException.ThrowIfLessThan(peak, 1);
+
+        return 1 + (peak - 1) * Falloff(distance, iconSize, spacing);
+    }
+
     /// <summary>
     /// 计算每个磁贴的瞬时几何。返回的中心已含两端预留（见 <see cref="EndPadding"/>），
     /// 因此可直接当作画布坐标用于摆放与命中。
@@ -62,6 +70,7 @@ public static class DockMagnification
         ArgumentOutOfRangeException.ThrowIfLessThan(spacing, 0);
         ArgumentOutOfRangeException.ThrowIfLessThan(peak, 1);
 
+        var extraWidth = 0d;
         for (var index = 0; index < geometry.Length; index++)
         {
             var center = SlotCenter(index, iconSize, spacing, peak);
@@ -74,6 +83,20 @@ public static class DockMagnification
             }
 
             geometry[index] = new TileGeometry(center, scale);
+            extraWidth += iconSize * (scale - 1);
+        }
+
+        if (geometry.Length == 0) return;
+
+        var baseLength = geometry.Length * iconSize + (geometry.Length - 1) * spacing;
+        var availableLength = RequiredLength(geometry.Length, iconSize, spacing, peak);
+        var rowLength = baseLength + extraWidth;
+        var cursor = Math.Max(0, (availableLength - rowLength) / 2);
+        for (var index = 0; index < geometry.Length; index++)
+        {
+            var width = iconSize * geometry[index].Scale;
+            geometry[index] = new TileGeometry(cursor + width / 2, geometry[index].Scale);
+            cursor += width + spacing;
         }
 
     }
@@ -129,28 +152,19 @@ public static class DockMagnification
         return -1;
     }
 
-    /// <summary>
-    /// 沿 Dock 轴两端的预留量（DIP）：峰值放大时首尾磁贴各向外膨胀这么多。
-    /// </summary>
-    /// <remarks>
-    /// 必须真的把磁贴<strong>向内</strong>让出这份余量，而不只是把总长度算大一点。
-    /// 只加总长时首枚磁贴的左边缘仍在负坐标上（默认峰值下实测 −8.4 DIP），
-    /// 而容器是裁切的，放大后就被切掉一条边。
-    /// </remarks>
+    /// <summary>静止态下画布两端各留出的放大余量（DIP）。</summary>
     public static double EndPadding(double iconSize, double peak)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(iconSize, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(peak, 1);
 
-        return (peak - 1) * iconSize / 2;
+        return (peak - 1) * iconSize * .75;
     }
 
-    /// <summary>
-    /// 一行磁贴需要的总长度（沿 Dock 轴，DIP）。
-    /// </summary>
+    /// <summary>一行磁贴需要的总长度（沿 Dock 轴，DIP），含连续邻居波形的最坏放大余量。</summary>
     /// <remarks>
-    /// 等于「未放大总长 + 两端预留」，与 <see cref="Compute"/> 的坐标完全对齐：
-    /// 首枚磁贴放大后的左边缘恰好在 0，末枚的右边缘恰好等于这个长度。
+    /// 等于「未放大总长 + 两端预留」，为 1.5 个图标峰值余量预留空间，
+    /// 与 <see cref="Compute"/> 的居中布局坐标对齐，避免邻居同时放大时裁切。
     /// </remarks>
     public static double RequiredLength(int count, double iconSize, double spacing, double peak)
     {
@@ -161,7 +175,7 @@ public static class DockMagnification
             return 0;
         }
 
-        return count * iconSize + (count - 1) * spacing + (2 * EndPadding(iconSize, peak));
+        return count * iconSize + (count - 1) * spacing + iconSize * (peak - 1) * 1.5;
     }
 
     /// <summary>
@@ -196,16 +210,17 @@ public static class DockMagnification
     }
 
     /// <summary>
-    /// 缩放衰减曲线：距离 0 处取 1（全额放大），一个节距外平滑衰减到 0。
+    /// 缩放衰减曲线：距离 0 处取 1（全额放大），1.5 个节距外平滑衰减到 0。
     /// </summary>
     /// <remarks>
     /// 用余弦钟形而不是线性三角：衰减平滑，动画不会在相邻磁贴之间出现折角。
-    /// 影响半径定为一个节距——目标移动到槽位中心时，紧邻磁贴回到原尺寸，避免遮挡。
+    /// 1.5 个节距的影响半径让鼠标停在图标中心时邻居仍有轻微响应；
+    /// 该范围内所有图标的最大总缩放余量不超过 1.5 枚图标的峰值余量。
     /// </remarks>
     private static double Falloff(double distance, double iconSize, double spacing)
     {
         var pitch = iconSize + spacing;
-        var radius = pitch;
+        var radius = pitch * 1.5;
 
         if (distance >= radius)
         {
@@ -215,4 +230,5 @@ public static class DockMagnification
         var t = distance / radius;
         return 0.5 * (1 + Math.Cos(t * Math.PI));
     }
+
 }

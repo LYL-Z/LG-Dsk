@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LG Dsk · 更新与下载</title>
+<style>
+:root{color-scheme:light;font:16px/1.65 system-ui,sans-serif;color:#322b27;background:#f7f2e9}
+body{max-width:700px;margin:12vh auto;padding:0 24px}header{color:#b75e43;letter-spacing:.06em}h1{font-size:42px;line-height:1.15;font-weight:600}p{color:#786d62}
+button{background:#c96f52;color:white;border:0;border-radius:12px;padding:13px 24px;font:inherit;cursor:pointer}button:disabled{opacity:.55;cursor:wait}a{color:#a85038}progress{width:100%;accent-color:#c96f52}#status{min-height:2em}small{display:block;margin-top:35px;color:#786d62}details{margin:28px 0}pre{white-space:pre-wrap;font:inherit}footer{border-top:1px solid #ddd0c0;margin-top:48px;padding-top:20px}
+</style>
+<body>
+<header>✳ LG DSK</header>
+<h1>让桌面，回到手边。</h1>
+<p>Windows 液态玻璃 Dock 与应用切换工具。这里是独立更新分发入口。</p>
+<h2 id="version">正在读取正式版本…</h2>
+<button id="download" disabled>下载 Windows x64 安装包</button>
+<p id="status" role="status" aria-live="polite"></p><progress id="progress" max="100" value="0" hidden></progress>
+<details><summary>版本说明</summary><pre id="notes"></pre></details>
+<small>下载会并行获取文件分块并校验 SHA-256，全部通过后才保存安装包。此页面不执行安装。断线后可重试；浏览器刷新将丢失本页内存缓存。安装包尚未进行 Authenticode 签名。</small>
+<footer><a href="https://github.com/LYL-Z/LG-Dsk/releases">GitHub 备用下载与历史版本</a> · <a href="https://github.com/LYL-Z/LG-Dsk">源代码</a></footer>
+<script type="module">
+const $=id=>document.getElementById(id), status=$('status'), button=$('download');
+const cache=new Map(); let release;
+const bytes64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+const hash=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),x=>x.toString(16).padStart(2,'0')).join('');
+async function get(path,timeout=30000){const r=await fetch(path,{signal:AbortSignal.timeout(timeout),redirect:'error'});if(!r.ok)throw Error(`下载失败 (${r.status})，请重试或使用 GitHub 备用入口。`);return r;}
+async function readChunk(c,report){const response=await get(`/chunks/${c.sha256.toLowerCase()}.bin`,180000),reader=response.body.getReader(),parts=[];let size=0;try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>c.size)throw Error('文件分块超出声明大小');parts.push(value);report(size);}}finally{reader.releaseLock();}const bytes=new Uint8Array(size);let offset=0;for(const part of parts){bytes.set(part,offset);offset+=part.length;}return bytes;}
+try {
+ const envelope=await(await get('/stable.json')).json(), payload=bytes64(envelope.payload);
+ const pem=await(await get('/publisher-key.json')).json();
+ const key=await crypto.subtle.importKey('spki',bytes64(pem.replace(/-----[^-]+-----|\s/g,'')),{name:'RSA-PSS',hash:'SHA-256'},false,['verify']);
+ if(!await crypto.subtle.verify({name:'RSA-PSS',saltLength:32},key,bytes64(envelope.signature),payload))throw Error('版本目录签名校验失败。');
+ release=JSON.parse(new TextDecoder().decode(payload));
+ if(release.schemaVersion!==1||release.channel!=='stable'||Date.parse(release.expiresUtc)<=Date.now()||!/^LG-Dsk-\d+\.\d+\.\d+-win-x64-Setup\.exe$/.test(release.fileName)||!Array.isArray(release.chunks)||release.chunks.length<1||release.chunks.length>64||release.size<=0||release.size>536870912||!release.chunks.every(c=>/^[a-fA-F0-9]{64}$/.test(c.sha256)&&Number.isInteger(c.size)&&c.size>0&&c.size<=16777216)||release.chunks.reduce((n,c)=>n+c.size,0)!==release.size)throw Error('版本目录已过期或格式无效，请使用备用入口。');
+ $('version').textContent=`LG Dsk ${release.version}`; $('notes').textContent=release.notes; button.disabled=false; status.textContent=`安装包 ${(release.size/1048576).toFixed(1)} MB`;
+}catch(e){status.textContent=e.message; $('version').textContent='暂时无法读取正式版本';}
+button.addEventListener('click',async()=>{
+ button.disabled=true; $('progress').hidden=false;
+ try{
+  let index=0; const parts=new Array(release.chunks.length), received=new Array(parts.length).fill(0);
+  const report=()=>{$('progress').value=Math.min(99,received.reduce((a,b)=>a+b,0)/release.size*100);status.textContent=`正在下载 ${$('progress').value.toFixed(0)}% · 校验后保存`;};
+  const tasks=await Promise.allSettled(Array.from({length:3},async()=>{while(index<parts.length){const i=index++,c=release.chunks[i];let bytes=cache.get(c.sha256);if(!bytes){let failure;for(let attempt=0;attempt<3;attempt++){try{bytes=await readChunk(c,n=>{received[i]=n;report();});if(bytes.length!==c.size||await hash(bytes)!==c.sha256.toLowerCase())throw Error('文件分块校验失败');cache.set(c.sha256,bytes);failure=null;break;}catch(e){failure=e;}}if(failure)throw failure;}parts[i]=bytes;received[i]=c.size;report();}}));
+  const failed=tasks.find(t=>t.status==='rejected');if(failed)throw failed.reason;
+  const blob=new Blob(parts,{type:'application/octet-stream'});
+  if(blob.size!==release.size||await hash(await blob.arrayBuffer())!==release.sha256.toLowerCase())throw Error('安装包总校验失败，已阻止保存。');
+  const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=release.fileName;a.click();setTimeout(()=>URL.revokeObjectURL(url),60000);$('progress').value=100;status.textContent='校验通过，安装包已交给浏览器保存。';
+ }catch(e){status.textContent=`${e.name==='TimeoutError'?'网络连接超时，请重试或使用 GitHub 备用入口。':e.message} 已下载并校验的分块保留在本页，可再次点击重试。`;}
+ finally{button.disabled=false;}
+});
+</script>
+</body></html>

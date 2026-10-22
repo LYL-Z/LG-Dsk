@@ -47,6 +47,28 @@ public class WindowMatcherTests
     }
 
     [Fact]
+    public void 前台窗口只在唯一匹配时归属到应用库条目()
+    {
+        var entry = ProgramEntry(@"C:\Apps\editor.exe");
+        var window = Window(1, imagePath: @"C:\Apps\editor.exe");
+
+        Assert.Same(entry, WindowMatcher.FindUniqueEntryForWindow([entry], window));
+
+        var ambiguous = ProgramEntry(@"C:\Apps\editor.exe");
+        ambiguous.Id = "e2";
+        Assert.Null(WindowMatcher.FindUniqueEntryForWindow([entry, ambiguous], window));
+    }
+
+    [Fact]
+    public void 前台窗口识别会跳过应用库保留的空记录()
+    {
+        var entry = ProgramEntry(@"C:\Apps\editor.exe");
+        var window = Window(1, imagePath: @"C:\Apps\editor.exe");
+
+        Assert.Same(entry, WindowMatcher.FindUniqueEntryForWindow([null!, entry, null!], window));
+    }
+
+    [Fact]
     public void 打包应用按进程身份匹配()
     {
         // 探针实测：打包版记事本的窗口身份为空，身份在归属进程上。

@@ -14,3 +14,6 @@ TestResults/
 *.pfx
 *.p12
 *.pem
+!src/GlassDesk.AppServices/Resources/update-publisher-public.pem
+node_modules/
+docs/evidence/

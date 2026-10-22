@@ -28,25 +28,35 @@ public sealed class DockBuiltinEntrySettingsTests
                 var host = DockSettingsHost.Initialize(Dispatcher.CurrentDispatcher);
                 window.AttachServices(services, host, () => { });
                 window.Show();
-                var names = new[] { "LauncherButton", "ThisPcButton", "DesktopIconsButton" };
-                var fields = new[] { "ShowLauncherEntry", "ShowThisPcEntry", "ShowDesktopIconsEntry" };
+                var names = new[] { "LauncherButton", "ThisPcButton" };
+                var fields = new[] { "ShowLauncherEntry", "ShowThisPcEntry" };
                 var buttons = names.Select(n => Assert.IsType<Button>(window.FindName(n))).ToArray();
-                var row = Assert.IsType<StackPanel>(buttons[0].Parent);
-                Assert.Equal(buttons, row.Children.OfType<Button>().ToArray());
-                for (var mask = 0; mask < 8; mask++)
+                var canvas = Assert.IsType<Canvas>(buttons[0].Parent);
+                var allButtons = canvas.Children.OfType<Button>().ToArray();
+                Assert.Equal(new[] { "FinderButton", "SettingsButton", "LauncherButton", "ThisPcButton" },
+                    allButtons.Select(button => button.Name).ToArray());
+                Assert.Null(window.FindName("DesktopIconsButton"));
+                Assert.Null(window.FindName("DownloadsRecycleDivider"));
+                var leadingDivider = Assert.IsType<Border>(window.FindName("LeadingGroupDivider"));
+                Assert.IsType<Border>(window.FindName("TrailingGroupDivider"));
+                Assert.Equal(Visibility.Collapsed, leadingDivider.Visibility);
+                for (var mask = 0; mask < 4; mask++)
                 {
                     var settings = new DockSettings();
-                    for (var i = 0; i < 3; i++) SetEntry(settings, fields[i], (mask & (1 << i)) != 0);
+                    for (var i = 0; i < 2; i++) SetEntry(settings, fields[i], (mask & (1 << i)) != 0);
                     host.Update(settings);
                     window.UpdateLayout();
-                    double x = 0;
-                    for (var i = 0; i < 3; i++)
+                    double? previousX = null;
+                    for (var i = 0; i < 2; i++)
                     {
                         var visible = (mask & (1 << i)) != 0;
                         Assert.Equal(visible ? Visibility.Visible : Visibility.Collapsed, buttons[i].Visibility);
                         if (!visible) continue;
-                        Assert.Equal(x, buttons[i].TranslatePoint(new Point(), row).X, 5);
-                        x += 56;
+                        var x = buttons[i].TranslatePoint(new Point(), canvas).X;
+                        var restingPitch = 48 + 8;
+                        if (previousX is { } prior) Assert.Equal(prior + restingPitch, x, 5);
+                        else Assert.True(x >= 2 * restingPitch, "Optional entries follow the permanent Finder and Settings icons.");
+                        previousX = x;
                     }
                     Assert.Empty(data.Layouts.Dock.PinnedItemIds);
                     Assert.Equal(0, window.TileCount);
@@ -70,27 +80,31 @@ public sealed class DockBuiltinEntrySettingsTests
                 data.LoadAll();
                 var host = DockSettingsHost.Initialize(Dispatcher.CurrentDispatcher);
                 window.AttachDataStore(data, null);
-                var fields = new[] { "ShowLauncherEntry", "ShowThisPcEntry", "ShowDesktopIconsEntry" };
-                foreach (var field in fields)
-                {
-                    var box = Assert.IsType<CheckBox>(window.FindName(field + "CheckBox"));
-                    Assert.True(box.IsChecked);
-                    box.IsChecked = false;
-                }
+                var launcher = Assert.IsType<CheckBox>(window.FindName("ShowLauncherEntryCheckBox"));
+                var thisPc = Assert.IsType<CheckBox>(window.FindName("ShowThisPcEntryCheckBox"));
+                var recent = Assert.IsType<CheckBox>(window.FindName("ShowRecentApplicationsCheckBox"));
+                Assert.True(launcher.IsChecked);
+                Assert.False(thisPc.IsChecked);
+                Assert.True(recent.IsChecked);
+                launcher.IsChecked = false;
+                thisPc.IsChecked = true;
+                recent.IsChecked = false;
                 Assert.IsType<Slider>(window.FindName("DockOffsetXSlider")).Value = 25;
                 var reloaded = new SettingsStore(data.Paths.SettingsFile);
                 reloaded.Load();
-                foreach (var field in fields)
-                {
-                    Assert.False(GetEntry(reloaded.Current.Dock, field));
-                    Assert.False(GetEntry(host.Settings, field));
-                }
+                Assert.False(reloaded.Current.Dock.ShowLauncherEntry);
+                Assert.True(reloaded.Current.Dock.ShowThisPcEntry);
+                Assert.False(reloaded.Current.Dock.ShowRecentApplications);
+                Assert.False(host.Settings.ShowLauncherEntry);
+                Assert.True(host.Settings.ShowThisPcEntry);
+                Assert.False(host.Settings.ShowRecentApplications);
                 Assert.Equal(25, reloaded.Current.Dock.OffsetX);
                 var loaded = new GlassDeskDataStore(data.Paths);
                 loaded.LoadAll();
                 window.AttachDataStore(loaded, null);
-                foreach (var field in fields)
-                    Assert.False(Assert.IsType<CheckBox>(window.FindName(field + "CheckBox")).IsChecked);
+                Assert.False(Assert.IsType<CheckBox>(window.FindName("ShowLauncherEntryCheckBox")).IsChecked);
+                Assert.True(Assert.IsType<CheckBox>(window.FindName("ShowThisPcEntryCheckBox")).IsChecked);
+                Assert.False(Assert.IsType<CheckBox>(window.FindName("ShowRecentApplicationsCheckBox")).IsChecked);
             }
             finally { window.Close(); if (Directory.Exists(root)) Directory.Delete(root, true); }
         });
@@ -118,7 +132,7 @@ public sealed class DockBuiltinEntrySettingsTests
                 frame.Value = frame.Minimum;
                 dock.UpdateLayout();
                 Assert.Equal(frame.Value, dock.ActualWidth, 5);
-                Assert.IsType<CheckBox>(window.FindName("ShowDesktopIconsEntryCheckBox")).IsChecked = false;
+                Assert.IsType<CheckBox>(window.FindName("ShowThisPcEntryCheckBox")).IsChecked = true;
                 frame.Value = frame.Minimum;
                 dock.UpdateLayout();
                 Assert.Equal(frame.Value, dock.ActualWidth, 5);
@@ -128,21 +142,15 @@ public sealed class DockBuiltinEntrySettingsTests
     }
 
     [Fact]
-    public void DesktopIconsEntryInvokesHostActionOncePerClick()
+    public void DesktopIconsToggleIsNotPartOfTheDock()
     {
         StaTest.Run(() =>
         {
             var window = new DockWindow();
             try
             {
-                var callback = typeof(DockWindow).GetProperty("ToggleDesktopIcons");
-                Assert.NotNull(callback);
-                var count = 0;
-                callback.SetValue(window, (Action)(() => count++));
-                var button = Assert.IsType<Button>(window.FindName("DesktopIconsButton"));
-                button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                Assert.Equal(2, count);
+                Assert.Null(window.FindName("DesktopIconsButton"));
+                Assert.Null(typeof(DockWindow).GetProperty("ToggleDesktopIcons"));
             }
             finally { window.Close(); }
         });

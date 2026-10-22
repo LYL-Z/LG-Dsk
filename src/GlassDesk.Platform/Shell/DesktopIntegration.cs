@@ -5,6 +5,35 @@ using GlassDesk.Platform.Displays;
 namespace GlassDesk.Platform.Shell;
 public static class ForegroundCoverage
 {
+    public enum InputDesktopState { Default, SecureOrOther, Unknown }
+
+    /// <summary>Classifies the active input desktop without switching or modifying it.</summary>
+    public static InputDesktopState ReadInputDesktopState()
+    {
+        nint desktop = 0;
+        try
+        {
+            desktop = OpenInputDesktop(0, false, 0x0001); // DESKTOP_READOBJECTS
+            if (desktop == 0) return InputDesktopState.Unknown;
+            var name = new char[256];
+            if (!GetUserObjectInformation(desktop, 2, name, name.Length * sizeof(char), out _))
+                return InputDesktopState.Unknown;
+            var terminator = Array.IndexOf(name, '\0');
+            var desktopName = new string(name, 0, terminator < 0 ? name.Length : terminator);
+            return string.Equals(desktopName, "Default", StringComparison.OrdinalIgnoreCase)
+                ? InputDesktopState.Default
+                : InputDesktopState.SecureOrOther;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            return InputDesktopState.Unknown;
+        }
+        finally
+        {
+            if (desktop != 0) CloseDesktop(desktop);
+        }
+    }
+
     /// <summary>True when a normal window from another process owns the foreground.</summary>
     public static bool IsExternalApplicationForeground()
     {
@@ -40,6 +69,10 @@ public static class ForegroundCoverage
     }
     [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left,Top,Right,Bottom; }
     [DllImport("user32.dll")] private static extern nint GetForegroundWindow();
+    [DllImport("user32.dll", SetLastError = true)] private static extern nint OpenInputDesktop(uint flags, bool inherit, uint desiredAccess);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool CloseDesktop(nint desktop);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool GetUserObjectInformation(nint handle, int index, [Out] char[] information, int length, out uint needed);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(nint hwnd);
     [DllImport("user32.dll")] private static extern bool IsIconic(nint hwnd);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint hwnd,out uint pid);

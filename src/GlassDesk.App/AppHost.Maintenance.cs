@@ -28,6 +28,7 @@ internal sealed partial class AppHost
             stopInteractions: DisposeInteractionController,
             stopTray: () =>
             {
+                DetachTaskbarCreatedListener();
                 _tray?.Dispose();
                 _tray = null;
             },

@@ -28,6 +28,30 @@ namespace GlassDesk.AppServices;
 /// </remarks>
 public static class WindowMatcher
 {
+    /// <summary>Finds the unique library entry matching a foreground window; ambiguous identities remain unknown.</summary>
+    public static AppEntry? FindUniqueEntryForWindow(
+        IEnumerable<AppEntry> entries,
+        WindowIdentityInfo? foregroundWindow,
+        IDictionary<string, string?>? identityCache = null)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        if (foregroundWindow is null) return null;
+
+        AppEntry? match = null;
+        foreach (var entry in entries)
+        {
+            // Malformed library rows are retained for repair but cannot identify windows.
+            if (entry is null || !entry.IsUsable
+                || MatchWindows(entry, [foregroundWindow], ResolveAumid(entry, identityCache)).Count == 0)
+                continue;
+
+            if (match is not null) return null;
+            match = entry;
+        }
+
+        return match;
+    }
+
     /// <summary>
     /// 在给定快照里找出这条记录此刻已运行的窗口。
     /// </summary>

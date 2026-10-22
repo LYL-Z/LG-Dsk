@@ -49,18 +49,21 @@ public sealed class AcceptanceScriptPathTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false, "", false)]
-    [InlineData(true, "", false)]
-    [InlineData(true, "1", true)]
-    public void 第三四阶段交互验收默认关闭且显式启用必须使用隔离桌面(bool interactiveAcceptance, string isolatedDesktop, bool expectedAllowed)
+    [InlineData(false, "", false, false)]
+    [InlineData(true, "", true, false)]
+    [InlineData(true, "1", false, false)]
+    [InlineData(true, "1", true, true)]
+    [InlineData(false, "1", true, false)]
+    public void 第三四阶段交互验收必须使用隔离桌面且由用户显式启用(bool interactiveAcceptance, string isolatedDesktop, bool activeAcceptanceDesktop, bool expectedAllowed)
     {
-        var result = RunBuildPolicy(includeWpf: false, desktopAcceptance: false, isolatedDesktop, interactiveAcceptance, checkInteractivePolicy: true);
+        var result = RunBuildPolicy(includeWpf: false, desktopAcceptance: false, isolatedDesktop: isolatedDesktop,
+            interactiveAcceptance: interactiveAcceptance, checkInteractivePolicy: true, activeAcceptanceDesktop: activeAcceptanceDesktop);
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("|" + expectedAllowed, result.Output, StringComparison.OrdinalIgnoreCase);
 
         var repository = FindRepositoryRoot();
         var source = File.ReadAllText(Path.Combine(repository.FullName, "build", "build.ps1"));
-        var gateIndex = source.IndexOf("if ($InteractiveAcceptance -and -not (Test-InteractiveAcceptanceAllowed", StringComparison.Ordinal);
+        var gateIndex = source.IndexOf("if (($InteractiveAcceptance -or $UiAcceptance) -and -not (Test-InteractiveAcceptanceAllowed", StringComparison.Ordinal);
         var dotnetIndex = source.IndexOf("$dotnet = Resolve-Dotnet", StringComparison.Ordinal);
         Assert.True(gateIndex >= 0 && gateIndex < dotnetIndex, "Interactive acceptance gate must run before build/test/UI setup.");
         Assert.Contains("[switch]$InteractiveAcceptance", source, StringComparison.Ordinal);
@@ -69,12 +72,14 @@ public sealed class AcceptanceScriptPathTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false, "", true)]
-    [InlineData(true, "", false)]
-    [InlineData(true, "1", true)]
-    public void 真实桌面验收在非隔离桌面拒绝启动(bool desktopAcceptance, string isolatedDesktop, bool expectedAllowed)
+    [InlineData(false, "", false, true)]
+    [InlineData(true, "", false, false)]
+    [InlineData(true, "1", false, false)]
+    [InlineData(true, "1", true, true)]
+    public void 真实桌面验收需要隔离环境标志和活动专用桌面(bool desktopAcceptance, string isolatedDesktop, bool activeAcceptanceDesktop, bool expectedAllowed)
     {
-        var result = RunBuildPolicy(includeWpf: false, desktopAcceptance, isolatedDesktop);
+        var result = RunBuildPolicy(includeWpf: false, desktopAcceptance: desktopAcceptance, isolatedDesktop: isolatedDesktop,
+            activeAcceptanceDesktop: activeAcceptanceDesktop);
         Assert.Equal(0, result.ExitCode);
         Assert.StartsWith(expectedAllowed.ToString(), result.Output, StringComparison.OrdinalIgnoreCase);
 
@@ -309,11 +314,24 @@ public sealed class AcceptanceScriptPathTests : IDisposable
         });
     }
 
-    private (int ExitCode, string Output) RunBuildPolicy(bool includeWpf, bool desktopAcceptance, string isolatedDesktop, bool interactiveAcceptance = false, bool checkInteractivePolicy = false)
+    private (int ExitCode, string Output) RunBuildPolicy(bool includeWpf, bool desktopAcceptance, string isolatedDesktop,
+        bool interactiveAcceptance = false, bool checkInteractivePolicy = false, bool activeAcceptanceDesktop = false)
     {
         var repository = FindRepositoryRoot();
         const string command = """
             $ErrorActionPreference = 'Stop'
+            Add-Type -TypeDefinition @'
+            namespace GlassDesk.Acceptance
+            {
+                public static class DesktopIsolationGuard
+                {
+                    public static bool IsActiveAcceptanceDesktop()
+                    {
+                        return System.Environment.GetEnvironmentVariable("GD_TEST_ACTIVE_DESKTOP") == "1";
+                    }
+                }
+            }
+            '@
             try {
                 $source = [IO.File]::ReadAllText($env:GD_TEST_SCRIPT, [Text.Encoding]::UTF8)
                 $tokens = $null; $errors = $null
@@ -348,6 +366,7 @@ public sealed class AcceptanceScriptPathTests : IDisposable
             ["GD_TEST_ISOLATED"] = isolatedDesktop,
             ["GD_TEST_INTERACTIVE"] = interactiveAcceptance ? "1" : "0",
             ["GD_TEST_CHECK_INTERACTIVE"] = checkInteractivePolicy ? "1" : "0",
+            ["GD_TEST_ACTIVE_DESKTOP"] = activeAcceptanceDesktop ? "1" : "0",
         });
     }
 

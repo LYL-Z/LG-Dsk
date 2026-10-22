@@ -27,7 +27,34 @@ public partial class LauncherWindow
                 DereferenceLinks = false,
                 Filter = "所有文件|*.*",
             };
-            if (ShowModalDialog(() => picker.ShowDialog(this))) ImportPaths(picker.FileNames);
+            try
+            {
+                if (ShowModalDialog(() => picker.ShowDialog(this))) ImportPaths(picker.FileNames);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                ShowNotice("Windows 文件选择器未能打开或读取所选项目。可以改用“从文件夹批量添加应用快捷方式”，或将快捷方式拖入窗口。" + Environment.NewLine + ex.Message);
+            }
+        });
+        AddMenu(menu, "从文件夹批量添加应用快捷方式…", () =>
+        {
+            var picker = new OpenFolderDialog { Title = "选择包含应用快捷方式的文件夹", Multiselect = false };
+            try
+            {
+                if (!ShowModalDialog(() => picker.ShowDialog(this))) return;
+                var (paths, truncated) = FindApplicationFiles(picker.FolderName, 1000);
+                if (paths.Count == 0)
+                {
+                    ShowNotice("所选文件夹中没有找到 .lnk、.url 或 .exe 应用项目。");
+                    return;
+                }
+                ImportPaths(paths);
+                if (truncated) ShowNotice("本次最多扫描并添加 1000 个应用项目；如仍有遗漏，请继续选择其他子文件夹。");
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                ShowNotice("扫描应用快捷方式失败；原有应用库未被删除。" + Environment.NewLine + ex.Message);
+            }
         });
         AddMenu(menu, "文件夹…", () =>
         {
@@ -66,6 +93,47 @@ public partial class LauncherWindow
         {
             ShowNotice("应用库写入失败；请检查数据目录并重试：" + ex.Message);
         }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // ImportService reports per-item failures. This boundary covers the remaining
+            // UI/store integration path so one Shell or layout error cannot crash the window.
+            ShowNotice("导入未能完整完成；已经导入的项目仍保留在应用库中。" + ex.Message);
+            try { RefreshLibrary(); }
+            catch (Exception refreshError) when (refreshError is not OutOfMemoryException)
+            { ShowNotice("应用库刷新失败，请重新打开启动台查看。" + refreshError.Message); }
+        }
+    }
+
+    private static (IReadOnlyList<string> Paths, bool Truncated) FindApplicationFiles(string folder, int maximum)
+    {
+        if (string.IsNullOrWhiteSpace(folder) || maximum < 1)
+            return (Array.Empty<string>(), false);
+
+        var fullFolder = Path.GetFullPath(folder);
+        if (!Directory.Exists(fullFolder))
+            return (Array.Empty<string>(), false);
+
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = true,
+            ReturnSpecialDirectories = false,
+            AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.Device,
+        };
+        var paths = new List<string>(Math.Min(maximum, 128));
+        foreach (var path in Directory.EnumerateFiles(fullFolder, "*", options))
+        {
+            var extension = Path.GetExtension(path);
+            if (!extension.Equals(".lnk", StringComparison.OrdinalIgnoreCase)
+                && !extension.Equals(".url", StringComparison.OrdinalIgnoreCase)
+                && !extension.Equals(".exe", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (paths.Count == maximum)
+                return (paths, true);
+            paths.Add(path);
+        }
+        return (paths, false);
     }
 
     private void AddWebsite()

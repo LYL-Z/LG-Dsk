@@ -94,11 +94,15 @@ public sealed class InteractionSettingsService(SettingsStore store, IHotkeyRegis
     private int nextId = 0x1000;
     private bool disposed;
 
+    /// <summary>快捷键资源无法及时清理时提供给宿主展示的提示。</summary>
+    public string? LastWarning { get; private set; }
+
     public InputAction ResolveAction(int id) => active.Values.FirstOrDefault(value => value.Id == id).Action;
 
     public string? Apply(ShortcutSettings shortcuts, DisplaySettings display, bool persist = true)
     {
         if (disposed) return "快捷操作服务已经关闭。";
+        LastWarning = null;
         var next = SettingsPageEditor.Clone(store.Current);
         next.Shortcuts = shortcuts;
         next.Display = display;
@@ -110,7 +114,7 @@ public sealed class InteractionSettingsService(SettingsStore store, IHotkeyRegis
         var invalid = SettingsPageEditor.Validate(next);
         if (invalid is not null) return invalid;
         var desired = new Dictionary<HotkeyChord, (int Id, InputAction Action)>();
-        var added = new List<int>();
+        var added = new List<KeyValuePair<HotkeyChord, (int Id, InputAction Action)>>();
         foreach (var (action, definition) in HotkeyText.Bindings(next.Shortcuts))
         {
             if (!definition.Enabled) continue;
@@ -119,10 +123,11 @@ public sealed class InteractionSettingsService(SettingsStore store, IHotkeyRegis
             var id = nextId++;
             if (!registry.TryRegister(id, chord, out var error))
             {
-                foreach (var registered in added) registry.Unregister(registered);
-                return $"快捷键 {definition.Describe()} 注册失败（错误 {error}），可能已被其他程序占用；原设置已保留。";
+                var cleanupFailures = UnregisterOrRetain(added);
+                RetainInactiveBindings(cleanupFailures);
+                return AddCleanupWarning($"快捷键 {definition.Describe()} 注册失败（错误 {error}），可能已被其他程序占用；原设置已保留。");
             }
-            added.Add(id);
+            added.Add(new KeyValuePair<HotkeyChord, (int Id, InputAction Action)>(chord, (id, action)));
             desired.Add(chord, (id, action));
         }
 
@@ -135,14 +140,50 @@ public sealed class InteractionSettingsService(SettingsStore store, IHotkeyRegis
         catch (Exception ex) when (ex is StorageException or IOException or UnauthorizedAccessException)
         {
             SettingsPageEditor.Apply(store.Current, before);
-            foreach (var registered in added) registry.Unregister(registered);
-            return "保存失败，已恢复原设置及快捷键：" + ex.Message;
+            var cleanupFailures = UnregisterOrRetain(added);
+            RetainInactiveBindings(cleanupFailures);
+            return AddCleanupWarning("保存失败，已恢复原设置及快捷键：" + ex.Message);
         }
 
-        foreach (var removed in active.Where(pair => !desired.ContainsKey(pair.Key))) registry.Unregister(removed.Value.Id);
+        var removedBindings = active.Where(pair => !desired.ContainsKey(pair.Key)).ToArray();
+        var failedToUnregister = UnregisterOrRetain(removedBindings);
         active = desired;
+        RetainInactiveBindings(failedToUnregister);
         return null;
     }
+
+    private List<KeyValuePair<HotkeyChord, (int Id, InputAction Action)>> UnregisterOrRetain(
+        IEnumerable<KeyValuePair<HotkeyChord, (int Id, InputAction Action)>> bindings)
+    {
+        var failures = new List<KeyValuePair<HotkeyChord, (int Id, InputAction Action)>>();
+        foreach (var binding in bindings)
+        {
+            if (registry.Unregister(binding.Value.Id)) continue;
+
+            // Keep the registration in the ownership map so the next settings update can retry.
+            // InputAction.None prevents the stale native ID from dispatching the removed action.
+            failures.Add(new KeyValuePair<HotkeyChord, (int Id, InputAction Action)>(
+                binding.Key, (binding.Value.Id, InputAction.None)));
+        }
+        return failures;
+    }
+
+    private void RetainInactiveBindings(IEnumerable<KeyValuePair<HotkeyChord, (int Id, InputAction Action)>> bindings)
+    {
+        var retainedAny = false;
+        foreach (var stale in bindings)
+        {
+            active.TryAdd(stale.Key, stale.Value);
+            retainedAny = true;
+        }
+
+        if (retainedAny)
+            LastWarning = "Windows 暂未释放旧快捷键。该按键已禁用且会在下次修改设置时重试；请避免将该组合键分配给其他程序。";
+    }
+
+    private string AddCleanupWarning(string message) => LastWarning is null
+        ? message
+        : message + Environment.NewLine + LastWarning;
 
     public void Dispose()
     {

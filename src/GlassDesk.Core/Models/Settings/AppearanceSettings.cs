@@ -24,7 +24,7 @@ public sealed class AppearanceSettings
     public GlassMaterialMode GlassMaterial { get; set; } = GlassMaterialMode.AndroidLiquidGlass;
 
     /// <summary>
-    /// 固定为深色液态玻璃；旧版主题值在加载和保存时统一为深色。
+    /// Dock 与启动台使用的配色模式。设置中心保留独立的暖色 Claude 衍生主题。
     /// </summary>
     public ThemeMode Theme { get; set; } = ThemeMode.Dark;
 

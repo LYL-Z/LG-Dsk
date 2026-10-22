@@ -58,7 +58,7 @@ Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加快捷方式:"; Flags: unchecked
 
 [Files]
-Source: "{#StageDirectory}\*"; DestDir: "{app}"; Excludes: "Data\*"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#StageDirectory}\*"; DestDir: "{app}"; Excludes: "Data\*,portable.flag"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StageDirectory}\LGDsk.ico"; DestDir: "{app}"; DestName: "LGDsk-{#ProductVersion}.ico"; Flags: ignoreversion
 Source: "Migrate-ExistingInstall.ps1"; Flags: dontcopy
 

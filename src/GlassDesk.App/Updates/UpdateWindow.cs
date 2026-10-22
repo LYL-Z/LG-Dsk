@@ -96,7 +96,8 @@ internal sealed class UpdateWindow : Window, IDisposable
                     var transfer = $"已下载 {FormatBytes(value.ReceivedBytes)} / {FormatBytes(value.TotalBytes)}（{value.Percent}%）";
                     var attempt = value.Attempt > 1 ? $" · 第 {value.Attempt} 次尝试" : string.Empty;
                     var resume = value.IsResuming ? " · 正在续传" : string.Empty;
-                    _status.Text = transfer + attempt + resume;
+                    var source = string.IsNullOrWhiteSpace(value.Source) ? string.Empty : $" · {value.Source}";
+                    _status.Text = transfer + attempt + resume + source;
                 }
             }), _cancellation.Token);
         }

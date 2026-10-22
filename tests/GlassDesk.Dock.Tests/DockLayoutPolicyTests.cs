@@ -72,6 +72,25 @@ public class DockLayoutPolicyTests
         Assert.False(DockLayoutPolicy.SameOrder(["a"], ["a", "b"]));
         Assert.True(DockLayoutPolicy.SameOrder([], []));
     }
+
+    [Fact]
+    public void 最近区最多三个且不显示固定失效重复或内置入口()
+    {
+        var recent = DockLayoutPolicy.ProjectRecentApplications(
+            ["app-a", "app-b", "app-a", "entry:launcher", "stale", "app-c", "app-d"],
+            ["app-b"],
+            Library.Contains);
+
+        Assert.Equal(["app-a", "app-c", "app-d"], recent);
+    }
+
+    [Fact]
+    public void 最近区可关闭且限制值安全封顶()
+    {
+        Assert.Empty(DockLayoutPolicy.ProjectRecentApplications(["app-a"], [], Library.Contains, 0));
+        Assert.Equal(["app-a", "app-b", "app-c"],
+            DockLayoutPolicy.ProjectRecentApplications(["app-a", "app-b", "app-c", "app-d"], [], Library.Contains, 99));
+    }
 }
 
 /// <summary>

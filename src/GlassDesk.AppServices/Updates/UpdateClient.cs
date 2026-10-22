@@ -18,16 +18,18 @@ public sealed partial class UpdateClient
     private static readonly TimeSpan MaximumDownloadDuration = TimeSpan.FromMinutes(45);
     private readonly HttpClient _http;
     private readonly Uri _source;
+    private readonly bool _useStaticFeed;
 
-    public UpdateClient(HttpClient http, Uri source)
+    public UpdateClient(HttpClient http, Uri source, bool useStaticFeed = false)
     {
         ArgumentNullException.ThrowIfNull(http);
         Repository(source);
         _http = http;
         _source = source;
+        _useStaticFeed = useStaticFeed;
     }
 
-    public async Task<UpdateRelease?> CheckAsync(Version current, CancellationToken token)
+    private async Task<UpdateRelease?> CheckGitHubAsync(Version current, CancellationToken token)
     {
         Exception? lastFailure = null;
         for (var attempt = 1; attempt <= 3; attempt++)
@@ -123,7 +125,7 @@ public sealed partial class UpdateClient
         }
     }
 
-    public async Task<string> DownloadAsync(UpdateRelease release, string cacheRoot,
+    private async Task<string> DownloadGitHubAsync(UpdateRelease release, string cacheRoot,
         IProgress<UpdateDownloadProgress>? progress, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(release);
@@ -323,9 +325,10 @@ public sealed partial class UpdateClient
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (InvalidDataException)
         {
-            // The version/digest directory is owned by this download and may contain only
-            // its partial installer. Remove it after any integrity or protocol violation.
-            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+            // Remove invalid installer bytes, while retaining independently verified
+            // content-addressed chunks from a previous static-source attempt.
+            if (File.Exists(partial)) File.Delete(partial);
+            if (File.Exists(final)) File.Delete(final);
             throw;
         }
         catch (OperationCanceledException ex)
@@ -379,7 +382,7 @@ public sealed partial class UpdateClient
     private static HttpRequestMessage Request(Uri url, bool metadata)
     {
         var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.UserAgent.ParseAdd("GlassDesk-Updater/1.0");
+        request.Headers.UserAgent.ParseAdd("LG-Dsk-Updater/2.0");
         if (metadata) request.Headers.Accept.ParseAdd("application/vnd.github+json");
         return request;
     }

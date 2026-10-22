@@ -65,6 +65,66 @@ public sealed class LaunchService : ILaunchService
     }
 
     /// <summary>
+    /// 把拖入应用磁贴的文件路径作为引用参数交给应用启动目标。
+    /// 仅对程序与快捷方式开放，防止文件夹、文档或 URL 磁贴被误当作应用。
+    /// </summary>
+    public LaunchResult LaunchWithFiles(string itemId, IReadOnlyList<string> paths)
+    {
+        var entry = _library.Find(itemId);
+        if (entry is null)
+        {
+            return new LaunchResult
+            {
+                Succeeded = false,
+                Failure = LaunchFailureReason.UnknownItem,
+                Message = "应用库里没有这一条记录。",
+            };
+        }
+
+        if (entry.Kind is not (AppItemKind.Program or AppItemKind.Shortcut))
+        {
+            return new LaunchResult
+            {
+                Succeeded = false,
+                Failure = LaunchFailureReason.Unsupported,
+                Message = "只有程序和应用快捷方式可以接收拖入的文件。",
+            };
+        }
+
+        if (IsTargetGone(entry))
+        {
+            return new LaunchResult
+            {
+                Succeeded = false,
+                Failure = LaunchFailureReason.TargetMissing,
+                Message = $"目标已不在原处，请重新定位：{entry.Target}",
+            };
+        }
+
+        if (!TryNormalizeDroppedPaths(paths, out var normalizedPaths))
+        {
+            return new LaunchResult
+            {
+                Succeeded = false,
+                Failure = LaunchFailureReason.Unsupported,
+                Message = "拖入的文件列表无效、已不可访问，或一次拖入的项目过多。",
+            };
+        }
+
+        if (!ApplicationFileDropArguments.TryAppend(entry.Arguments, normalizedPaths, out var arguments))
+        {
+            return new LaunchResult
+            {
+                Succeeded = false,
+                Failure = LaunchFailureReason.Unsupported,
+                Message = "文件路径太长，无法安全传给该应用。",
+            };
+        }
+
+        return OpenWithArguments(entry, arguments);
+    }
+
+    /// <summary>
     /// 优先把已有的窗口提到前面；没有窗口才启动。
     /// </summary>
     /// <remarks>
@@ -209,9 +269,11 @@ public sealed class LaunchService : ILaunchService
         };
     }
 
-    private LaunchResult OpenWithShell(AppEntry entry)
+    private LaunchResult OpenWithShell(AppEntry entry) => OpenWithArguments(entry, entry.Arguments);
+
+    private LaunchResult OpenWithArguments(AppEntry entry, string? arguments)
     {
-        var outcome = ShellExecutor.Open(entry.Target, entry.Arguments, entry.WorkingDirectory);
+        var outcome = ShellExecutor.Open(entry.Target, arguments, entry.WorkingDirectory);
 
         if (outcome.Started)
         {
@@ -225,6 +287,39 @@ public sealed class LaunchService : ILaunchService
             Failure = Classify(outcome),
             Message = Describe(outcome, entry),
         };
+    }
+
+    private static bool TryNormalizeDroppedPaths(IReadOnlyList<string> paths, out IReadOnlyList<string> normalized)
+    {
+        normalized = [];
+        if (paths is null || paths.Count is 0 or > ApplicationFileDropArguments.MaximumPathCount)
+        {
+            return false;
+        }
+
+        try
+        {
+            var result = new List<string>(paths.Count);
+            // Do not collapse paths that differ only by case: Windows can expose
+            // case-sensitive directories, so those can be distinct source files.
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var path in paths)
+            {
+                if (string.IsNullOrWhiteSpace(path)) return false;
+
+                var fullPath = Path.GetFullPath(path);
+                if (!File.Exists(fullPath) && !Directory.Exists(fullPath)) return false;
+                if (seen.Add(fullPath)) result.Add(fullPath);
+            }
+
+            normalized = result;
+            return result.Count > 0;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException
+            or NotSupportedException or System.Security.SecurityException)
+        {
+            return false;
+        }
     }
 
     private static LaunchFailureReason Classify(ShellLaunchOutcome outcome) => outcome switch

@@ -98,7 +98,8 @@ public sealed class GlassMaterialSettingsTests
     [Theory]
     [InlineData("Light")]
     [InlineData("System")]
-    public void LegacyAppearanceLoadsAsDarkLiquidGlassWhilePreservingOtherPreferences(string theme)
+    [InlineData("Dark")]
+    public void LegacyAppearancePreservesThemeAndAccessibilityPreferences(string theme)
     {
         using var temp = new TempDataDirectory();
         Directory.CreateDirectory(Path.GetDirectoryName(temp.Paths.SettingsFile)!);
@@ -106,13 +107,15 @@ public sealed class GlassMaterialSettingsTests
             $$$"""{"schemaVersion":1,"appearance":{"theme":"{{{theme}}}","glassMaterial":"PhysicalGlass","glassBackgroundClarity":0.8,"reduceMotion":true,"reduceTransparency":true}}""");
         var store = new SettingsStore(temp.Paths.SettingsFile);
         store.Load();
-        Assert.Equal(ThemeMode.Dark, store.Current.Appearance.Theme);
+        var expectedTheme = Enum.Parse<ThemeMode>(theme);
+        Assert.Equal(expectedTheme, store.Current.Appearance.Theme);
         Assert.Equal(GlassMaterialMode.AndroidLiquidGlass, store.Current.Appearance.GlassMaterial);
         Assert.Equal(.8, store.Current.Appearance.GlassBackgroundClarity);
         Assert.True(store.Current.Appearance.ReduceMotion);
-        Assert.False(store.Current.Appearance.ReduceTransparency);
+        Assert.True(store.Current.Appearance.ReduceTransparency);
         store.Save();
         store.Load();
-        Assert.Equal(ThemeMode.Dark, store.Current.Appearance.Theme);
+        Assert.Equal(expectedTheme, store.Current.Appearance.Theme);
+        Assert.True(store.Current.Appearance.ReduceTransparency);
     }
 }

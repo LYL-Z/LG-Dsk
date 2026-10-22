@@ -9,6 +9,7 @@ using GlassDesk.Core.Models.Settings;
 using GlassDesk.Platform.Installation;
 using GlassDesk.UI.Settings;
 using GlassDesk.UI.Theming;
+using ThemeMode = GlassDesk.Core.Models.ThemeMode;
 
 namespace GlassDesk.Settings;
 
@@ -92,13 +93,15 @@ public partial class SettingsWindow
         try
         {
             var appearance = _dataStore.Settings.Current.Appearance;
+            AppearanceThemeCombo.SelectedIndex = Enum.IsDefined(appearance.Theme) ? (int)appearance.Theme : 0;
             AppearanceMaterialCombo.SelectedIndex = appearance.GlassMaterial == GlassMaterialMode.FrostedGlass ? 1 : 0;
             DockTransparencySlider.Value = appearance.DockGlassTransparency;
             LauncherTransparencySlider.Value = appearance.LauncherGlassTransparency;
             DockTransparencyValue.Text = appearance.DockGlassTransparency.ToString("P0", CultureInfo.CurrentCulture);
             LauncherTransparencyValue.Text = appearance.LauncherGlassTransparency.ToString("P0", CultureInfo.CurrentCulture);
             ReduceMotionCheck.IsChecked = appearance.ReduceMotion;
-            AppearanceStatus.Text = "设置面板固定使用深色不透明背景；玻璃透明度应用到 Dock 和启动台。";
+            ReduceTransparencyCheck.IsChecked = appearance.ReduceTransparency;
+            AppearanceStatus.Text = "设置中心使用暖纸色；主题可跟随 Windows 或单独选择浅色、深色。关闭系统透明效果或启用高对比度时会自动使用清晰的不透明面板。";
         }
         finally { _loadingAppearanceControls = false; }
     }
@@ -108,9 +111,12 @@ public partial class SettingsWindow
         if (_loadingAppearanceControls || _dataStore is null) return;
         var current = _dataStore.Settings.Current;
         var snapshot = SettingsPageEditor.Clone(current);
+        if (AppearanceThemeCombo.SelectedIndex is >= 0 and <= 2)
+            current.Appearance.Theme = (ThemeMode)AppearanceThemeCombo.SelectedIndex;
         current.Appearance.GlassMaterial = AppearanceMaterialCombo.SelectedIndex == 1
             ? GlassMaterialMode.FrostedGlass : GlassMaterialMode.AndroidLiquidGlass;
         current.Appearance.ReduceMotion = ReduceMotionCheck.IsChecked == true;
+        current.Appearance.ReduceTransparency = ReduceTransparencyCheck.IsChecked == true;
         SavePageSnapshot(snapshot, "外观", AppearanceStatus);
     }
 
@@ -143,6 +149,7 @@ public partial class SettingsWindow
             PreviousPageHotkeyBox.Text = HotkeyText.Format(current.Shortcuts.PreviousPage);
             ToggleDesktopIconsHotkeyBox.Text = HotkeyText.Format(current.Shortcuts.ToggleDesktopIcons);
             ToggleRunningAppSwitcherHotkeyBox.Text = HotkeyText.Format(current.Shortcuts.ToggleRunningAppSwitcher);
+            FocusDockHotkeyBox.Text = HotkeyText.Format(current.Shortcuts.FocusDock);
             InteractionSettingsStatus.Text = "快捷键录制完成后自动保存并应用。";
         }
         catch (Exception ex)
@@ -158,11 +165,12 @@ public partial class SettingsWindow
         if (!TryReadHotkey(ToggleLauncherHotkeyBox, out var toggle)
             || !TryReadHotkey(NextPageHotkeyBox, out var next) || !TryReadHotkey(PreviousPageHotkeyBox, out var previous)
             || !TryReadHotkey(ToggleDesktopIconsHotkeyBox, out var icons)
-            || !TryReadHotkey(ToggleRunningAppSwitcherHotkeyBox, out var appSwitcher)) return;
+            || !TryReadHotkey(ToggleRunningAppSwitcherHotkeyBox, out var appSwitcher)
+            || !TryReadHotkey(FocusDockHotkeyBox, out var focusDock)) return;
         var shortcuts = new ShortcutSettings
         {
             ToggleLauncher = toggle, HideLauncher = new(), NextPage = next, PreviousPage = previous,
-            ToggleDesktopIcons = icons, ToggleRunningAppSwitcher = appSwitcher,
+            ToggleDesktopIcons = icons, ToggleRunningAppSwitcher = appSwitcher, FocusDock = focusDock,
         };
         var display = new DisplaySettings
         {
@@ -204,7 +212,8 @@ public partial class SettingsWindow
     public bool TryCaptureRegisteredHotkey(nint packedChord)
     {
         var recorder = new[] { ToggleLauncherHotkeyBox, NextPageHotkeyBox,
-            PreviousPageHotkeyBox, ToggleDesktopIconsHotkeyBox, ToggleRunningAppSwitcherHotkeyBox }
+            PreviousPageHotkeyBox, ToggleDesktopIconsHotkeyBox, ToggleRunningAppSwitcherHotkeyBox,
+            FocusDockHotkeyBox }
             .FirstOrDefault(control => control.IsRecording && control.IsKeyboardFocusWithin);
         if (recorder is null) return false;
         var packed = unchecked((uint)packedChord.ToInt64());
@@ -417,7 +426,7 @@ public partial class SettingsWindow
             ThemeService.Current?.Update(current.Appearance);
         }
         if (page == "启动台") LauncherSettingsChanged?.Invoke(this, current.Launcher);
-        if (page == "性能") PerformanceSettingsChanged?.Invoke(this, EventArgs.Empty);
+        if (page is "性能" or "性能与兼容" or "应用岛") PerformanceSettingsChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void ReloadPage(string page)
@@ -428,7 +437,9 @@ public partial class SettingsWindow
             case "Dock": LoadDockControls(); DockSettingsHost.Current?.Update(_dataStore!.Settings.Current.Dock); break;
             case "启动台": LoadLauncherControls(); LauncherSettingsChanged?.Invoke(this, _dataStore!.Settings.Current.Launcher); break;
             case "快捷操作": LoadInteractionControls(); break;
-            case "性能": LoadPerformanceControls(); break;
+            case "性能":
+            case "性能与兼容":
+            case "应用岛": LoadPerformanceControls(); break;
             case "桌面": LoadDesktopStatus(); break;
         }
     }
@@ -436,6 +447,9 @@ public partial class SettingsWindow
     private TextBlock StatusFor(string page) => page switch
     {
         "外观" => AppearanceStatus, "Dock" => DockSettingsStatus, "启动台" => LauncherSettingsStatus,
-        "快捷操作" => InteractionSettingsStatus, "性能" => PerformanceSettingsStatus, _ => DesktopSettingsStatus,
+        "快捷操作" => InteractionSettingsStatus,
+        "应用岛" => IslandSettingsStatus,
+        "性能" or "性能与兼容" => PerformanceSettingsStatus,
+        _ => DesktopSettingsStatus,
     };
 }

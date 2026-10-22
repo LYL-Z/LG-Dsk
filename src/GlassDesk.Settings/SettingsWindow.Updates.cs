@@ -51,7 +51,7 @@ public partial class SettingsWindow
 
         AutomaticUpdateCheckChanged?.Invoke(enabled);
         UpdateStatusText.Text = enabled
-            ? "已启用自动检查。只查询公开 GitHub 正式版；下载与安装前仍会征求确认。"
+            ? "已启用自动检查。优先检查签名的静态正式版目录，必要时回退到 GitHub；下载与安装前仍会征求确认。"
             : "已关闭自动检查；仍可随时手动检查更新。";
     }
 }

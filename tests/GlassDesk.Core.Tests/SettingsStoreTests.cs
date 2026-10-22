@@ -11,14 +11,14 @@ public sealed class SettingsStoreTests : IDisposable
     public void Dispose() => _temp.Dispose();
 
     [Fact]
-    public void LoadDisablesRemovedPointerDockAndFullscreenFeaturesFromLegacySettings()
+    public void LoadPreservesDockAutoHidePreferencesButDisablesRemovedPointerDockAndFullscreenFeatures()
     {
         File.WriteAllText(_temp.Paths.SettingsFile,
             """{"dock":{"autoHide":true,"edgeRevealEnabled":true},"launcher":{"fullscreenMode":true},"shortcuts":{"hotCornersEnabled":true,"hotCornerTarget":"TopLeft","mouseSideButtonsEnabled":true}}""");
         var store = new SettingsStore(_temp.Paths.SettingsFile);
         store.Load();
-        Assert.False(store.Current.Dock.AutoHide);
-        Assert.False(store.Current.Dock.EdgeRevealEnabled);
+        Assert.True(store.Current.Dock.AutoHide);
+        Assert.True(store.Current.Dock.EdgeRevealEnabled);
         Assert.False(store.Current.Launcher.FullscreenMode);
         Assert.False(store.Current.Shortcuts.HotCornersEnabled);
         Assert.False(store.Current.Shortcuts.MouseSideButtonsEnabled);
@@ -44,6 +44,8 @@ public sealed class SettingsStoreTests : IDisposable
         Assert.Equal(8, store.Current.Dock.IconSpacing);
         Assert.Equal(1.35, store.Current.Dock.MagnificationPeak);
         Assert.Equal(300, store.Current.Dock.AutoHideLeaveDelayMs);
+        Assert.Equal(DockFolderStackViewMode.Grid, store.Current.Dock.FolderStackViewMode);
+        Assert.Equal(DockFolderStackSortMode.Name, store.Current.Dock.FolderStackSortMode);
 
         Assert.Equal(5, store.Current.Launcher.Rows);
         Assert.Equal(7, store.Current.Launcher.Columns);
@@ -65,6 +67,13 @@ public sealed class SettingsStoreTests : IDisposable
         store.Current.Appearance.AccentColor = "#FF3B30";
         store.Current.Dock.Placement = DockPlacement.TopCenter;
         store.Current.Dock.TargetDisplayId = "DISPLAY2";
+        store.Current.Dock.AutoHide = true;
+        store.Current.Dock.EdgeRevealEnabled = true;
+        store.Current.Dock.IconSize = 56;
+        store.Current.Dock.IconSpacing = 12;
+        store.Current.Dock.MagnificationPeak = 1.6;
+        store.Current.Dock.FolderStackViewMode = DockFolderStackViewMode.Fan;
+        store.Current.Dock.FolderStackSortMode = DockFolderStackSortMode.ModifiedDate;
         store.Save();
 
         var reloaded = new SettingsStore(_temp.Paths.SettingsFile);
@@ -75,6 +84,35 @@ public sealed class SettingsStoreTests : IDisposable
         Assert.Equal("#FF3B30", reloaded.Current.Appearance.AccentColor);
         Assert.Equal(DockPlacement.TopCenter, reloaded.Current.Dock.Placement);
         Assert.Equal("DISPLAY2", reloaded.Current.Dock.TargetDisplayId);
+        Assert.True(reloaded.Current.Dock.AutoHide);
+        Assert.True(reloaded.Current.Dock.EdgeRevealEnabled);
+        Assert.Equal(56, reloaded.Current.Dock.IconSize);
+        Assert.Equal(12, reloaded.Current.Dock.IconSpacing);
+        Assert.Equal(1.6, reloaded.Current.Dock.MagnificationPeak);
+        Assert.Equal(DockFolderStackViewMode.Fan, reloaded.Current.Dock.FolderStackViewMode);
+        Assert.Equal(DockFolderStackSortMode.ModifiedDate, reloaded.Current.Dock.FolderStackSortMode);
+    }
+
+    [Fact]
+    public void Normalize_UnknownFolderStackViewMode_UsesGrid()
+    {
+        var settings = new GlassDeskSettings();
+        settings.Dock.FolderStackViewMode = (DockFolderStackViewMode)999;
+
+        settings.Normalize();
+
+        Assert.Equal(DockFolderStackViewMode.Grid, settings.Dock.FolderStackViewMode);
+    }
+
+    [Fact]
+    public void Normalize_UnknownFolderStackSortMode_UsesName()
+    {
+        var settings = new GlassDeskSettings();
+        settings.Dock.FolderStackSortMode = (DockFolderStackSortMode)999;
+
+        settings.Normalize();
+
+        Assert.Equal(DockFolderStackSortMode.Name, settings.Dock.FolderStackSortMode);
     }
 
     [Fact]

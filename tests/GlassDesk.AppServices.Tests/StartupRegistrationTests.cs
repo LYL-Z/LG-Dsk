@@ -116,7 +116,7 @@ public sealed class StartupRegistrationTests : IDisposable
     public void 已删除的旧版程序启动路径可以由用户显式替换()
     {
         var registration = CreateRegistration();
-        var oldDirectory = Path.Combine(_root, "old install");
+        var oldDirectory = Path.Combine(_root, "LG Dsk");
         Directory.CreateDirectory(oldDirectory);
         var oldPath = Path.Combine(oldDirectory, "GlassDesk.exe");
         var oldCommand = $"\"{oldPath}\" --autostart";
@@ -133,10 +133,31 @@ public sealed class StartupRegistrationTests : IDisposable
     }
 
     [Fact]
+    public void 旧版未带参数的LGDsk启动命令仍识别为产品启动项并可显式切换()
+    {
+        var registration = CreateRegistration();
+        var oldDirectory = Path.Combine(_root, "LG Dsk");
+        Directory.CreateDirectory(oldDirectory);
+        var oldPath = Path.Combine(oldDirectory, "GlassDesk.exe");
+        File.WriteAllText(oldPath, "legacy product executable");
+        var oldCommand = $"\"{oldPath}\"";
+        _runKey.SetValue(ValueName, oldCommand, RegistryValueKind.String);
+
+        var status = registration.Query(_executablePath);
+        var replaced = registration.SetEnabled(_executablePath, enabled: true, replaceProductTarget: true);
+
+        Assert.Equal(StartupRegistrationState.OtherProductTarget, status.State);
+        Assert.Equal(oldPath, status.TargetPath);
+        Assert.True(replaced.Succeeded, replaced.Error);
+        Assert.Equal(StartupRegistrationState.Owned, registration.Query(_executablePath).State);
+        Assert.True(File.Exists(oldPath));
+    }
+
+    [Fact]
     public void 已删除的旧版程序启动路径可由用户显式清除()
     {
         var registration = CreateRegistration();
-        var oldDirectory = Path.Combine(_root, "old install");
+        var oldDirectory = Path.Combine(_root, "LG Dsk");
         Directory.CreateDirectory(oldDirectory);
         var oldPath = Path.Combine(oldDirectory, "LGDsk.exe");
         _runKey.SetValue(ValueName, $"\"{oldPath}\" --autostart", RegistryValueKind.String);
@@ -146,6 +167,32 @@ public sealed class StartupRegistrationTests : IDisposable
         Assert.True(removed.Succeeded, removed.Error);
         Assert.Equal(StartupRegistrationState.Missing, removed.Status.State);
         Assert.Null(_runKey.GetValue(ValueName));
+    }
+
+    [Fact]
+    public void 另一份现存LGDsk安装仅在明确确认后切换登录启动目标()
+    {
+        var registration = CreateRegistration();
+        var otherDirectory = Path.Combine(_root, "LG Dsk");
+        Directory.CreateDirectory(otherDirectory);
+        var otherPath = Path.Combine(otherDirectory, "LGDsk.exe");
+        File.WriteAllText(otherPath, "other LG Dsk installation");
+        var otherCommand = $"\"{otherPath}\" --autostart";
+        _runKey.SetValue(ValueName, otherCommand, RegistryValueKind.String);
+
+        Assert.Equal(StartupRegistrationState.OtherProductTarget, registration.Query(_executablePath).State);
+
+        var withoutConfirmation = registration.SetEnabled(_executablePath, enabled: true);
+        Assert.False(withoutConfirmation.Succeeded);
+        Assert.Equal(StartupRegistrationState.OtherProductTarget, withoutConfirmation.Status.State);
+        Assert.Equal(otherCommand, _runKey.GetValue(ValueName));
+
+        var confirmedSwitch = registration.SetEnabled(_executablePath, enabled: true, replaceProductTarget: true);
+        Assert.True(confirmedSwitch.Succeeded, confirmedSwitch.Error);
+        Assert.Equal(StartupRegistrationState.Owned, registration.Query(_executablePath).State);
+        Assert.Equal($"\"{Path.GetFullPath(_executablePath)}\" --autostart", _runKey.GetValue(ValueName));
+        Assert.True(File.Exists(otherPath));
+        Assert.Equal("other LG Dsk installation", File.ReadAllText(otherPath));
     }
 
     [Fact]

@@ -17,6 +17,7 @@ using GlassDesk.Platform.Displays;
 using GlassDesk.Settings;
 using GlassDesk.UI.Controls;
 using GlassDesk.UI.Theming;
+using GlassDesk.Acceptance;
 
 internal static partial class Program
 {
@@ -27,6 +28,7 @@ internal static partial class Program
     private static int Main(string[] args)
     {
         if (GlassDesk.UI.BackdropCaptureWorker.RunIfRequested(args, out var workerExit)) return workerExit;
+        if (args.Contains("--isolation-guard-selftest")) return VerifyIsolationGuard();
         if (args.Contains("--appearance-customization")) return VerifyAppearanceCustomization(args);
         if (args.Contains("--dock-builtin-entries")) return VerifyDockBuiltinEntries(args);
         if (args.Contains("--desktop-icon-continuity")) return VerifyDockBuiltinEntries(args);
@@ -208,15 +210,15 @@ internal static partial class Program
                 VerifyIosDrag(window, grid, data, evidenceDirectory);
                 return _failed == 0 ? 0 : 1;
             }
-            if (args.Contains("--mouse-only"))
+            if (args.Contains("--keyboard-only"))
             {
-                var mouseWorkspace = new LauncherWorkspace(host);
-                var mouseEdit = mouseWorkspace.BeginEdit();
-                mouseEdit.Draft = LauncherLayoutEditor.CreateGroup(mouseEdit.Draft, "wpf-00", "wpf-01", "mouse-group", 35);
-                mouseWorkspace.Commit(mouseEdit);
+                var keyboardWorkspace = new LauncherWorkspace(host);
+                var keyboardEdit = keyboardWorkspace.BeginEdit();
+                keyboardEdit.Draft = LauncherLayoutEditor.CreateGroup(keyboardEdit.Draft, "wpf-00", "wpf-01", "keyboard-group", 35);
+                keyboardWorkspace.Commit(keyboardEdit);
                 window.RefreshLibrary();
                 window.Activate();
-                VerifyMouseOnlyTiles(window, grid, search);
+                VerifyKeyboardTiles(window, grid, search, "keyboard-group");
                 return _failed == 0 ? 0 : 1;
             }
             var display = primarySession.Display;
@@ -355,7 +357,7 @@ internal static partial class Program
             window.RefreshLibrary();
             Check("真实窗口呈现分组并保持单层", "L-12/L-16", grid.Children.Count == 35,
                 "35 个顶层槽位", $"{grid.Children.Count} 个顶层槽位");
-            VerifyMouseOnlyTiles(window, grid, search);
+            VerifyKeyboardTiles(window, grid, search, "wpf-group");
             var groupPanel = (Border)window.FindName("GroupPanel")!;
             ((Button)grid.Children[0]).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Check("生产分组按钮展开面板", "L-12/L-14", groupPanel.Visibility == Visibility.Visible,
@@ -495,6 +497,21 @@ internal static partial class Program
         if (!passed) _failed++;
         Cases.Add(new { name, ids, driver = ids == "IOS-INPUT" ? "system mouse/keyboard input" : "production WPF route/control state", expected, actual,
             status = passed ? "Passed" : "Failed", timestamp = DateTimeOffset.Now });
+    }
+
+    private static int VerifyIsolationGuard()
+    {
+        Check("接受活动的专用验收输入桌面", "safety/isolation",
+            DesktopIsolationGuard.IsNamedActiveAcceptanceDesktop("LGDsk-Acceptance-a1b2", "LGDsk-Acceptance-a1b2"),
+            "same LGDsk-Acceptance desktop", "same dedicated desktop");
+        Check("拒绝 Windows Default 输入桌面", "safety/isolation",
+            !DesktopIsolationGuard.IsNamedActiveAcceptanceDesktop("Default", "Default"), "refused", "Default desktop");
+        Check("拒绝非活动隔离桌面", "safety/isolation",
+            !DesktopIsolationGuard.IsNamedActiveAcceptanceDesktop("LGDsk-Acceptance-a1b2", "Default"), "refused", "input desktop differs");
+        Check("拒绝无专用名称的活动桌面", "safety/isolation",
+            !DesktopIsolationGuard.IsNamedActiveAcceptanceDesktop("Default", "Default"), "refused", "default desktop name");
+        Console.WriteLine($"Full-host isolation guard: {Cases.Count - _failed} passed, {_failed} failed.");
+        return _failed == 0 ? 0 : 1;
     }
 
     private static void Pump(TimeSpan duration)

@@ -82,4 +82,33 @@ public static class DockLayoutPolicy
 
         return true;
     }
+
+    /// <summary>Builds the recent zone without duplicates, stale ids, or applications already pinned.</summary>
+    public static List<string> ProjectRecentApplications(
+        IEnumerable<string> recentIds,
+        IEnumerable<string> pinnedIds,
+        Func<string, bool> isLibraryEntry,
+        int maximumItems = 3)
+    {
+        ArgumentNullException.ThrowIfNull(recentIds);
+        ArgumentNullException.ThrowIfNull(pinnedIds);
+        ArgumentNullException.ThrowIfNull(isLibraryEntry);
+
+        var limit = Math.Clamp(maximumItems, 0, 3);
+        if (limit == 0) return [];
+
+        var pinned = new HashSet<string>(pinnedIds, StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var result = new List<string>(limit);
+        foreach (var id in recentIds)
+        {
+            if (string.IsNullOrWhiteSpace(id) || IsEntryTile(id) || pinned.Contains(id)
+                || !isLibraryEntry(id) || !seen.Add(id)) continue;
+
+            result.Add(id);
+            if (result.Count == limit) break;
+        }
+
+        return result;
+    }
 }

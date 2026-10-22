@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using GlassDesk.Core.Models;
 using GlassDesk.Core.Models.Settings;
@@ -66,6 +67,47 @@ public sealed class BackupServiceTests : IDisposable
     }
 
     [Fact]
+    public void BackupTo_RollsBackPreviouslyReplacedFiles_WhenALaterTargetIsInvalid()
+    {
+        SeedSource();
+        var existingSettings = Path.Combine(_archive.Root, "settings.json");
+        File.WriteAllText(existingSettings, "keep the old backup");
+
+        // 让第二个归档目标故意成为目录，模拟磁盘目标中途不可写。
+        // settings.json 已先暂存并提交，失败后必须恢复原内容。
+        var conflictingTarget = Path.Combine(_archive.Root, "apps.json");
+        Directory.CreateDirectory(conflictingTarget);
+        var sentinel = Path.Combine(conflictingTarget, "keep.txt");
+        File.WriteAllText(sentinel, "keep the unrelated file");
+
+        var result = new BackupService(_temp.Paths).BackupTo(_archive.Root);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("keep the old backup", File.ReadAllText(existingSettings));
+        Assert.Equal("keep the unrelated file", File.ReadAllText(sentinel));
+        Assert.False(File.Exists(Path.Combine(_archive.Root, "manifest.json")));
+        Assert.Empty(Directory.GetDirectories(_archive.Root, ".lgdsk-backup-transaction-*"));
+    }
+
+    [Fact]
+    public void BackupTo_ReplacesManagedFilesAndPreservesUnrelatedDestinationContents()
+    {
+        SeedSource();
+        var oldSettings = Path.Combine(_archive.Root, "settings.json");
+        File.WriteAllText(oldSettings, "old backup");
+        var unrelated = Path.Combine(_archive.Root, "notes.txt");
+        File.WriteAllText(unrelated, "user-owned note");
+
+        var result = new BackupService(_temp.Paths).BackupTo(_archive.Root);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.DoesNotContain("old backup", File.ReadAllText(oldSettings), StringComparison.Ordinal);
+        Assert.Equal("user-owned note", File.ReadAllText(unrelated));
+        Assert.True(File.Exists(Path.Combine(_archive.Root, "manifest.json")));
+        Assert.Empty(Directory.GetDirectories(_archive.Root, ".lgdsk-backup-transaction-*"));
+    }
+
+    [Fact]
     public void BackupTo_SkipsDocumentsThatWereNeverSaved()
     {
         // 在用户尚未做过任何自定义时创建的备份，文件更少是合理的。
@@ -75,6 +117,47 @@ public sealed class BackupServiceTests : IDisposable
 
         Assert.True(result.Succeeded);
         Assert.Empty(result.Files);
+    }
+
+    [Fact]
+    public void BackupTo_RejectsDestinationInsideLiveDataDirectory()
+    {
+        SeedSource();
+        var destination = _temp.Paths.BackupDirectory;
+        var sentinel = Path.Combine(destination, "keep.txt");
+        File.WriteAllText(sentinel, "keep current data");
+
+        var result = new BackupService(_temp.Paths).BackupTo(destination);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("keep current data", File.ReadAllText(sentinel));
+        Assert.False(File.Exists(Path.Combine(destination, "manifest.json")));
+    }
+
+    [Fact]
+    public void BackupTo_RejectsDestinationBelowAReparsePointParent()
+    {
+        SeedSource();
+        var linkedParent = Path.Combine(_archive.Root, "redirected-parent");
+        Assert.True(TryCreateDirectoryLink(linkedParent, _newHome.Root), "测试环境无法创建临时目录联接。");
+        var outsideSentinel = Path.Combine(_newHome.Root, "keep.txt");
+        File.WriteAllText(outsideSentinel, "must remain unchanged");
+
+        try
+        {
+            var redirectedName = "backup-" + Guid.NewGuid().ToString("N");
+            var destination = Path.Combine(linkedParent, redirectedName);
+            var result = new BackupService(_temp.Paths).BackupTo(destination);
+
+            Assert.False(result.Succeeded);
+            Assert.Contains("重解析点", result.Error, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(_newHome.Root, redirectedName)));
+            Assert.Equal("must remain unchanged", File.ReadAllText(outsideSentinel));
+        }
+        finally
+        {
+            RemoveDirectoryLink(linkedParent);
+        }
     }
 
     [Fact]
@@ -517,5 +600,108 @@ public sealed class BackupServiceTests : IDisposable
         var reloaded = _temp.CreateStore();
         reloaded.LoadAll();
         Assert.Equal("#123456", reloaded.Settings.Current.Appearance.AccentColor);
+    }
+
+    [Fact]
+    public void RestoreFrom_RejectsLinkedBackupDirectoryBeforeReadingExternalFiles()
+    {
+        SeedSource();
+        var sourceIcon = Path.Combine(_temp.Paths.IconCacheDirectory, "custom-safe.png");
+        File.WriteAllBytes(sourceIcon, [1, 2, 3]);
+        Assert.True(new BackupService(_temp.Paths).BackupTo(_archive.Root).Succeeded);
+
+        var archiveIcons = Path.Combine(_archive.Root, AppPaths.IconCacheSubdirectory);
+        Directory.Delete(archiveIcons, recursive: true);
+        Assert.True(TryCreateDirectoryLink(archiveIcons, _newHome.Root), "测试环境无法创建临时目录联接。");
+        var externalFile = Path.Combine(_newHome.Root, "custom-external.png");
+        File.WriteAllText(externalFile, "must not be imported");
+
+        var live = _newHome.CreateStore();
+        live.LoadAll();
+        live.Settings.Current.Appearance.AccentColor = "#ABCDEF";
+        live.Settings.Save();
+
+        try
+        {
+            var result = new BackupService(_newHome.Paths).RestoreFrom(_archive.Root);
+
+            Assert.False(result.Succeeded);
+            Assert.Contains("路径", result.Error, StringComparison.Ordinal);
+            Assert.Equal("must not be imported", File.ReadAllText(externalFile));
+            var reloaded = _newHome.CreateStore();
+            reloaded.LoadAll();
+            Assert.Equal("#ABCDEF", reloaded.Settings.Current.Appearance.AccentColor);
+        }
+        finally
+        {
+            RemoveDirectoryLink(archiveIcons);
+        }
+    }
+
+    [Fact]
+    public void RestoreFrom_RejectsLinkedDestinationBeforeWritingOutsideDataRoot()
+    {
+        SeedSource();
+        var sourceIcon = Path.Combine(_temp.Paths.IconCacheDirectory, "custom-safe.png");
+        File.WriteAllBytes(sourceIcon, [1, 2, 3]);
+        Assert.True(new BackupService(_temp.Paths).BackupTo(_archive.Root).Succeeded);
+
+        var outsideSentinel = Path.Combine(_temp.Root, "destination-sentinel.txt");
+        File.WriteAllText(outsideSentinel, "must remain unchanged");
+        Directory.Delete(_newHome.Paths.IconCacheDirectory, recursive: true);
+        Assert.True(TryCreateDirectoryLink(_newHome.Paths.IconCacheDirectory, _temp.Root), "测试环境无法创建临时目录联接。");
+        Assert.True((File.GetAttributes(_newHome.Paths.IconCacheDirectory) & FileAttributes.ReparsePoint) != 0);
+
+        try
+        {
+            var result = new BackupService(_newHome.Paths).RestoreFrom(_archive.Root);
+
+            Assert.False(result.Succeeded);
+            Assert.Contains("路径", result.Error, StringComparison.Ordinal);
+            Assert.Equal("must remain unchanged", File.ReadAllText(outsideSentinel));
+            Assert.Equal(new byte[] { 1, 2, 3 }, File.ReadAllBytes(Path.Combine(_temp.Root, "icons", "custom-safe.png")));
+        }
+        finally
+        {
+            RemoveDirectoryLink(_newHome.Paths.IconCacheDirectory);
+        }
+    }
+
+    private static bool TryCreateDirectoryLink(string linkPath, string targetPath)
+    {
+        try
+        {
+            Directory.CreateSymbolicLink(linkPath, targetPath);
+            return true;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or PlatformNotSupportedException
+                                   or NotSupportedException)
+        {
+            if (!OperatingSystem.IsWindows()) return false;
+            try
+            {
+                var startInfo = new ProcessStartInfo("cmd.exe") { UseShellExecute = false, CreateNoWindow = true };
+                startInfo.ArgumentList.Add("/d");
+                startInfo.ArgumentList.Add("/c");
+                startInfo.ArgumentList.Add("mklink");
+                startInfo.ArgumentList.Add("/J");
+                startInfo.ArgumentList.Add(linkPath);
+                startInfo.ArgumentList.Add(targetPath);
+                using var process = Process.Start(startInfo);
+                process?.WaitForExit();
+                return process?.ExitCode == 0;
+            }
+            catch (Exception junctionException) when (junctionException is IOException or UnauthorizedAccessException
+                                                       or InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                return false;
+            }
+        }
+    }
+
+    private static void RemoveDirectoryLink(string path)
+    {
+        if (Directory.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            Directory.Delete(path, recursive: false);
     }
 }

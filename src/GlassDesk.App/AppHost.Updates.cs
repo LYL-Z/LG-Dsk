@@ -30,7 +30,7 @@ internal sealed partial class AppHost
         _settings.AutomaticUpdateCheckChanged += OnAutomaticUpdateCheckChanged;
         var enabled = _data!.Settings.Current.Updates.CheckAutomatically;
         _settings.ShowUpdateStatus(ProductVersion.ToString(), enabled
-            ? "已启用自动检查；正在连接 LG Dsk 公开正式版发布源。下载与安装前仍会征求确认。"
+            ? "已启用自动检查；优先连接签名的静态正式版目录，必要时回退到 GitHub。下载与安装前仍会征求确认。"
             : "自动检查已关闭；可随时手动检查 LG Dsk 正式版本。");
         ConfigureAutomaticUpdateChecks(enabled, checkImmediately: true);
     }
@@ -65,7 +65,7 @@ internal sealed partial class AppHost
             || !Uri.TryCreate(source, UriKind.Absolute, out var uri)
             || uri.Scheme != Uri.UriSchemeHttps)
             throw new InvalidDataException("LG Dsk 本地定制版未配置有效的 HTTPS 更新源。");
-        return new UpdateClient(_updateHttp, uri);
+        return new UpdateClient(_updateHttp, uri, useStaticFeed: true);
     }
 
     private async Task CheckUpdatesAsync(bool manual)

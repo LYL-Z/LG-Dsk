@@ -14,7 +14,9 @@ public static class WindowStyles
     private static readonly nint HwndTopmost = new(-1);
     private const uint SwpNoSize = 0x0001;
     private const uint SwpNoMove = 0x0002;
+    private const uint SwpNoZOrder = 0x0004;
     private const uint SwpNoActivate = 0x0010;
+    private const uint SwpFrameChanged = 0x0020;
 
     /// <summary>Raise an existing topmost window without changing focus, position, or size.</summary>
     public static bool BringToTopWithoutActivation(nint window)
@@ -74,6 +76,37 @@ public static class WindowStyles
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
         {
+            return false;
+        }
+    }
+
+    /// <summary>临时移除 <c>WS_EX_NOACTIVATE</c>，供用户明确要求键盘操作 Dock 时调用。</summary>
+    /// <remarks>
+    /// 样式变化后同步通知窗口管理器。调用方应在键盘操作结束或失焦时重新调用
+    /// <see cref="MakeNoActivate"/>，恢复平时点击 Dock 不抢焦点的行为。
+    /// </remarks>
+    public static bool MakeActivatable(nint window)
+    {
+        if (window == 0) return false;
+
+        try
+        {
+            var style = User32.GetWindowLong(window, User32.GwlExStyle);
+            if ((style & User32.WsExNoactivate) == 0) return true;
+
+            _ = User32.SetWindowLong(window, User32.GwlExStyle, style & ~User32.WsExNoactivate);
+            if (IsNoActivate(window)) return false;
+
+            var refreshed = Dpi32.SetWindowPos(window, 0, 0, 0, 0, 0,
+                SwpNoMove | SwpNoSize | SwpNoZOrder | SwpNoActivate | SwpFrameChanged);
+            if (refreshed) return true;
+
+            _ = MakeNoActivate(window);
+            return false;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            _ = MakeNoActivate(window);
             return false;
         }
     }

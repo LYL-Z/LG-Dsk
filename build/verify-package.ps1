@@ -95,6 +95,12 @@ try {
         throw 'Package version metadata does not match the release manifest.'
     }
     if ($report.status -ne 'Built') { throw "Unsupported build report status '$($report.status)'." }
+    if ($report.PSObject.Properties.Name -contains 'packageDirectory') {
+        throw 'Package metadata must not contain machine-specific build paths.'
+    }
+    if ($report.packageBaseName -ne $release.packageBaseName) {
+        throw 'Package build or compiler hash metadata is invalid.'
+    }
 
     $baseName = [string]$release.packageBaseName
     $expectedNames = @(
@@ -166,6 +172,10 @@ try {
     }
 
     $toolchain = Get-JsonObject -Path (Join-Path $packagePath 'toolchain.json')
+    if ($toolchain.PSObject.Properties.Name -contains 'innoCompilerPath' -or
+        [string]$toolchain.innoCompilerSha256 -notmatch '^[A-Fa-f0-9]{64}$') {
+        throw 'Package toolchain metadata contains a local path or invalid compiler hash.'
+    }
     if ([string]::IsNullOrWhiteSpace([string]$toolchain.sdkVersion) -or
         [string]::IsNullOrWhiteSpace([string]$toolchain.runtimeVersion) -or
         [string]::IsNullOrWhiteSpace([string]$toolchain.innoVersion) -or

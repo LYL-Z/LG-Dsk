@@ -45,17 +45,31 @@ public sealed class PackageVerificationTests : IDisposable
     }
 
     [Fact]
-    public void 含中文路径的候选清单由WindowsPowerShell按UTF8读取()
+    public void 含中文路径的候选包由WindowsPowerShell按UTF8读取且元数据不包含本机路径()
     {
         var localizedRoot = Path.Combine(_root, "阶段七 本地候选");
         Directory.CreateDirectory(localizedRoot);
         var fixture = CandidateFixture.Create(localizedRoot);
-        fixture.WriteBuildReportWithPackagePath();
+        var buildReport = File.ReadAllText(Path.Combine(fixture.PackageDirectory, "build-report.json"));
+
+        Assert.DoesNotContain(_root, buildReport, StringComparison.OrdinalIgnoreCase);
 
         var result = RunVerifier(fixture);
 
         Assert.True(result.ExitCode == 0, result.Output);
         Assert.Contains("PASS", result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void 构建报告含本机目录时必须拒绝()
+    {
+        var fixture = CandidateFixture.Create(_root);
+        fixture.WriteBuildReportWithPackagePath();
+
+        var result = RunVerifier(fixture);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("machine-specific", result.Output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]
@@ -351,6 +365,7 @@ public sealed class PackageVerificationTests : IDisposable
                 appId = AppId,
                 rid = "win-x64",
                 status = "Built",
+                packageBaseName = PackageBaseName,
                 packageDirectory = PackageDirectory,
             }, options), new UTF8Encoding(false));
             RebuildChecksums();
@@ -461,7 +476,7 @@ public sealed class PackageVerificationTests : IDisposable
                 innoInstallerSha256 = "0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f",
                 innoCompilerSha256 = new string('A', 64),
             }));
-            File.WriteAllText(BuildReportPath, JsonSerializer.Serialize(new { schemaVersion = 1, productName = "LG Dsk", productVersion = ProductVersion, assemblyVersion = AssemblyVersion, fileVersion = FileVersion, appId = AppId, rid = "win-x64", status = "Built" }));
+            File.WriteAllText(BuildReportPath, JsonSerializer.Serialize(new { schemaVersion = 1, productName = "LG Dsk", productVersion = ProductVersion, assemblyVersion = AssemblyVersion, fileVersion = FileVersion, appId = AppId, rid = "win-x64", status = "Built", packageBaseName = PackageBaseName }));
             File.WriteAllText(InnoLicensePath, "Inno Setup license notice");
             RebuildChecksums();
         }

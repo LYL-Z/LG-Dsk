@@ -12,6 +12,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/GlassDesk.Core.Tests/GlassDesk.Core.Tests.csproj" />
     <Project Path="tests/GlassDesk.AppServices.Tests/GlassDesk.AppServices.Tests.csproj" />
+    <Project Path="tests/GlassDesk.CompatibilityProbe/GlassDesk.CompatibilityProbe.csproj" />
     <Project Path="tests/GlassDesk.InstanceProbe/GlassDesk.InstanceProbe.csproj" />
     <Project Path="tests/GlassDesk.Dock.Tests/GlassDesk.Dock.Tests.csproj" />
     <Project Path="tests/GlassDesk.UiAcceptance/GlassDesk.UiAcceptance.csproj" />

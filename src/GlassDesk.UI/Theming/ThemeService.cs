@@ -35,7 +35,7 @@ public sealed class ThemeService : IDisposable
         _dispatcher = dispatcher;
 
         Appearance = new AppearanceSettings();
-        Palette = ResolvePalette(Appearance);
+        ApplyResolvedAppearance(ResolveAppearance(Appearance));
 
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
     }
@@ -56,7 +56,11 @@ public sealed class ThemeService : IDisposable
     /// <summary>跟随系统已解析后的实际主题。</summary>
     public bool IsDark { get; private set; }
 
-    public GlassPalette Palette { get; private set; }
+    /// <summary>Whether Windows currently requests a high-contrast presentation.</summary>
+    public bool IsHighContrast { get; private set; }
+
+    public GlassPalette Palette { get; private set; } = GlassPalette.Create(
+        isDark: true, GlassPalette.DefaultAccent, opaquePanels: false);
 
     /// <summary>
     /// 应当避免半透明时为 true：要么用户要求如此，
@@ -82,18 +86,7 @@ public sealed class ThemeService : IDisposable
     /// <summary>重新解析配色并触发 <see cref="Changed"/>。</summary>
     public void Refresh()
     {
-        IsDark = Appearance.Theme switch
-        {
-            ThemeMode.Dark => true,
-            ThemeMode.Light => false,
-
-            // 跟随操作系统。注册表值缺失或不可读时按浅色处理。
-            _ => !SystemThemeReader.IsLightTheme(),
-        };
-
-        UseOpaquePanels = Appearance.ReduceTransparency || !SystemThemeReader.IsTransparencyEnabled();
-        Palette = GlassPalette.Create(IsDark, GlassPalette.ParseAccent(Appearance.AccentColor), UseOpaquePanels);
-
+        ApplyResolvedAppearance(ResolveAppearance(Appearance));
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
@@ -101,7 +94,7 @@ public sealed class ThemeService : IDisposable
     /// 用户要求时抑制动画，
     /// Windows 通过同一设置块报告减少动画的偏好时同样抑制。
     /// </summary>
-    public bool AnimationsEnabled => !Appearance.ReduceMotion;
+    public bool AnimationsEnabled { get; private set; }
 
     public void Dispose()
     {
@@ -123,7 +116,8 @@ public sealed class ThemeService : IDisposable
     {
         // 在系统线程上触发。只有跟随系统和操作系统驱动的透明效果需要刷新，
         // 而这些属性的每次读取都归 UI 线程所有。
-        if (e.Category is not (UserPreferenceCategory.General or UserPreferenceCategory.Color or UserPreferenceCategory.VisualStyle))
+        if (e.Category is not (UserPreferenceCategory.General or UserPreferenceCategory.Color
+            or UserPreferenceCategory.VisualStyle or UserPreferenceCategory.Accessibility))
         {
             return;
         }
@@ -137,18 +131,17 @@ public sealed class ThemeService : IDisposable
         {
             if (!_disposed)
             {
-                // Shell icon visibility also sends General notifications. Broadcast
-                // only a changed resolved palette; otherwise every glass surface
-                // unnecessarily discards its completed desktop material.
-                var next = ResolvePalette(Appearance);
-                if (Palette.IsDark == next.IsDark && Palette.Accent == next.Accent
-                    && Palette.FallbackPanelBackground == next.FallbackPanelBackground) return;
-                Refresh();
+                // Shell icon visibility also sends General notifications. Avoid
+                // rebuilding glass surfaces unless an effective system preference changed.
+                var next = ResolveAppearance(Appearance);
+                if (SameAppearance(next)) return;
+                ApplyResolvedAppearance(next);
+                Changed?.Invoke(this, EventArgs.Empty);
             }
         });
     }
 
-    private static GlassPalette ResolvePalette(AppearanceSettings appearance)
+    private ResolvedAppearance ResolveAppearance(AppearanceSettings appearance)
     {
         var isDark = appearance.Theme switch
         {
@@ -157,9 +150,40 @@ public sealed class ThemeService : IDisposable
             _ => !SystemThemeReader.IsLightTheme(),
         };
 
-        var opaque = appearance.ReduceTransparency || !SystemThemeReader.IsTransparencyEnabled();
-        return GlassPalette.Create(isDark, GlassPalette.ParseAccent(appearance.AccentColor), opaque);
+        var highContrast = SystemParameters.HighContrast;
+        var opaque = appearance.ReduceTransparency || highContrast || !SystemThemeReader.IsTransparencyEnabled();
+        var animationsEnabled = !appearance.ReduceMotion && SystemParameters.ClientAreaAnimation;
+        var palette = highContrast
+            ? GlassPalette.CreateHighContrast()
+            : GlassPalette.Create(isDark, GlassPalette.ParseAccent(appearance.AccentColor), opaque);
+        return new ResolvedAppearance(isDark, highContrast, opaque, animationsEnabled, palette);
     }
+
+    private bool SameAppearance(ResolvedAppearance next) => IsDark == next.IsDark
+        && IsHighContrast == next.IsHighContrast
+        && UseOpaquePanels == next.UseOpaquePanels
+        && AnimationsEnabled == next.AnimationsEnabled
+        && Palette.IsHighContrast == next.Palette.IsHighContrast
+        && Palette.Accent == next.Palette.Accent
+        && Palette.AcrylicOverlayBackground == next.Palette.AcrylicOverlayBackground
+        && Palette.FallbackPanelBackground == next.Palette.FallbackPanelBackground
+        && Palette.AcrylicTint == next.Palette.AcrylicTint
+        && Palette.AcrylicTintAlpha == next.Palette.AcrylicTintAlpha
+        && Palette.PanelBorder == next.Palette.PanelBorder
+        && Palette.Foreground == next.Palette.Foreground
+        && Palette.SecondaryForeground == next.Palette.SecondaryForeground;
+
+    private void ApplyResolvedAppearance(ResolvedAppearance resolved)
+    {
+        IsDark = resolved.IsDark;
+        IsHighContrast = resolved.IsHighContrast;
+        UseOpaquePanels = resolved.UseOpaquePanels;
+        AnimationsEnabled = resolved.AnimationsEnabled;
+        Palette = resolved.Palette;
+    }
+
+    private sealed record ResolvedAppearance(bool IsDark, bool IsHighContrast, bool UseOpaquePanels,
+        bool AnimationsEnabled, GlassPalette Palette);
 
     /// <summary>给只想知道操作系统如何配置的调用方的便捷方法。</summary>
     public static bool SystemPrefersDark() => !SystemThemeReader.IsLightTheme();
@@ -168,6 +192,7 @@ public sealed class ThemeService : IDisposable
     public string Describe() =>
         $"主题={Appearance.Theme}（实际 {(IsDark ? "深色" : "浅色")}）" +
         $"，不透明面板={(UseOpaquePanels ? "是" : "否")}" +
+        $"，高对比度={(IsHighContrast ? "开" : "关")}" +
         $"，动画={(AnimationsEnabled ? "开" : "关")}" +
         $"，{WindowsCapabilities.Describe()}";
 }

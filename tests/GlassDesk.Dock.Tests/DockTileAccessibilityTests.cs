@@ -8,6 +8,24 @@ namespace GlassDesk.Dock.Tests;
 public class DockTileAccessibilityTests
 {
     [Fact]
+    public void IconCanBeAppliedAfterBackgroundLoadAndNotifiesBindings()
+    {
+        StaTest.Run(() =>
+        {
+            var tile = new DockTileModel();
+            var changed = new List<string?>();
+            tile.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+            var icon = new DrawingImage();
+            icon.Freeze();
+
+            tile.Icon = icon;
+
+            Assert.Same(icon, tile.Icon);
+            Assert.Contains(nameof(DockTileModel.Icon), changed);
+        });
+    }
+
+    [Fact]
     public void TileVisualExposesStableIdentityAndFullName()
     {
         StaTest.Run(() =>

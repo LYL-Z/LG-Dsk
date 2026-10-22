@@ -83,6 +83,9 @@ public sealed class ShortcutSettings
         Key = "Space",
     };
 
+    /// <summary>将键盘焦点移到 Dock；默认不占用系统或其他程序的快捷键。</summary>
+    public HotkeyDefinition FocusDock { get; set; } = new();
+
     /// <summary>
     /// 热区默认关闭。它很容易被误触发，因此需要用户显式
     /// 开启才会生效。
@@ -113,6 +116,7 @@ public sealed class ShortcutSettings
         ToggleDesktopIcons ??= new HotkeyDefinition();
         ToggleDockRevealLock ??= new HotkeyDefinition();
         ToggleRunningAppSwitcher ??= new HotkeyDefinition { Enabled = true, Control = true, Alt = true, Key = "Space" };
+        FocusDock ??= new HotkeyDefinition();
         MouseBackButton ??= new HotkeyDefinition();
         MouseForwardButton ??= new HotkeyDefinition();
     }

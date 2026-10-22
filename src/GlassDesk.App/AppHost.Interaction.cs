@@ -88,7 +88,8 @@ internal sealed partial class AppHost
     }
 
     private bool CanExecuteInteraction(InputAction action) => _interaction?.CanExecute(action) == true
-        && !_performancePointerInputSuppressed;
+        && (action != InputAction.FocusDock || _dock?.CanFocusKeyboardNavigation == true)
+        && (!_performancePointerInputSuppressed || action == InputAction.ToggleRunningAppSwitcher);
 
     private void ExecuteInteraction(InputAction action)
     {
@@ -111,6 +112,10 @@ internal sealed partial class AppHost
                 break;
             case InputAction.ToggleRunningAppSwitcher:
                 _dock?.ToggleRunningAppSwitcher();
+                break;
+            case InputAction.FocusDock:
+                if (_dock?.FocusForKeyboardNavigation() != true)
+                    ReportInteractionError("当前 Dock 被全屏、系统前景保护或窗口状态限制，暂时无法进入键盘操作。");
                 break;
         }
     }

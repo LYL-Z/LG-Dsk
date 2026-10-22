@@ -6,33 +6,47 @@ public sealed class DockForegroundPresentationTests
 {
     [Fact]
     public void FullDockRemainsVisibleOnDesktop()
-        => AssertState(covered: false, fullscreen: false, DockPresentationMode.DesktopDock, AutoHideState.Shown);
+        => AssertState(false, DockPresentationMode.DesktopDock, AutoHideState.Shown);
 
     [Fact]
-    public void ForegroundApplicationHidesDockWithoutMouseEdgeReveal()
-        => AssertState(covered: true, fullscreen: false, DockPresentationMode.Hidden, AutoHideState.Hidden);
+    public void OrdinaryForegroundApplicationKeepsDockVisibleWhenAutoHideIsOff()
+        => AssertState(false, DockPresentationMode.DesktopDock, AutoHideState.Shown);
 
     [Fact]
     public void ExplicitSwitcherRequestShowsOnlyCompactSwitcher()
-        => AssertState(covered: true, fullscreen: false, DockPresentationMode.RunningAppSwitcher, AutoHideState.Shown);
+        => AssertState(false, DockPresentationMode.RunningAppSwitcher, AutoHideState.Shown);
 
     [Fact]
     public void FullscreenApplicationAlwaysHidesDock()
-        => AssertState(covered: true, fullscreen: true, DockPresentationMode.Hidden, AutoHideState.Hidden);
+        => AssertState(true, DockPresentationMode.Hidden, AutoHideState.Hidden);
 
     [Fact]
     public void SettingsWindowHidesDockEvenWhenNoExternalApplicationIsForeground()
     {
-        var covered = DockPresentationPolicy.EffectiveExternalForeground(externalApplicationForeground: false,
+        _ = DockPresentationPolicy.EffectiveExternalForeground(externalApplicationForeground: false,
             settingsWindowVisible: true);
         Assert.Equal(DockPresentationMode.Hidden,
-            DockPresentationPolicy.Resolve(launcherActive: true, externalApplicationForeground: false,
-                foregroundIsFullscreen: false, hasSwitchableApplications: true, switcherRequested: false,
-                settingsWindowVisible: true));
-        AssertState(covered, fullscreen: false, DockPresentationMode.Hidden, AutoHideState.Hidden);
+            DockPresentationPolicy.Resolve(new DockPresentationContext(
+                DockForegroundKind.SecureDesktop,
+                DockTaskbarKind.Visible,
+                DockFullscreenKind.NotExclusive,
+                DockAwarenessRequest.None,
+                HasSwitcherContent: false,
+                LauncherActive: true,
+                SettingsWindowVisible: true)));
+        AssertState(false, DockPresentationMode.Hidden, AutoHideState.Hidden);
     }
 
-    private static void AssertState(bool covered, bool fullscreen, DockPresentationMode mode, AutoHideState expected)
+    [Fact]
+    public void UnsafeShellEnvironmentKeepsTheDockConcealed()
+        => AssertState(false, DockPresentationMode.Hidden, AutoHideState.Hidden,
+            environmentSuppressed: true);
+
+    private static void AssertState(
+        bool fullscreen,
+        DockPresentationMode mode,
+        AutoHideState expected,
+        bool environmentSuppressed = false)
     {
         StaTest.Run(() =>
         {
@@ -44,7 +58,7 @@ public sealed class DockForegroundPresentationTests
                     .SetValue(window, controller);
                 var update = typeof(DockWindow).GetMethod("UpdateAutoHideState", BindingFlags.Instance | BindingFlags.NonPublic);
                 Assert.NotNull(update);
-                update.Invoke(window, [DateTime.UtcNow, fullscreen, covered, mode]);
+                update.Invoke(window, [DateTime.UtcNow, fullscreen, mode, environmentSuppressed]);
                 Assert.Equal(expected, controller.State);
             }
             finally { window.Close(); }

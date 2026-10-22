@@ -2,199 +2,175 @@ using GlassDock = GlassDesk.Dock.DockMagnification;
 
 namespace GlassDesk.Dock.Tests;
 
-/// <summary>
-/// 放大几何的断言：固定槽位、峰值生效、命中与绘制同源（视觉即所得）。
-/// 用默认参数 48 DIP / 8 DIP / 1.35×（D-21）做基线。
-/// </summary>
-public class DockMagnificationTests
+/// <summary>连续放大、邻居让位和绘制/命中共用布局快照。</summary>
+public sealed class DockMagnificationTests
 {
     private const double Size = 48;
     private const double Spacing = 8;
     private const double Peak = 1.35;
 
     [Fact]
-    public void 未放大时槽位中心等距排列()
+    public void 未放大时图标等距且在画布中居中()
     {
         var geometry = GlassDock.Compute(4, Size, Spacing, Peak, pointerPosition: null);
-
-        Assert.Equal(4, geometry.Length);
-        Assert.All(geometry, tile => Assert.Equal(1.0, tile.Scale));
-
-        // 中心含两端预留 8.4（峰值 1.35、48 DIP 图标），节距 56。
-        var padding = GlassDock.EndPadding(Size, Peak);
-        Assert.Equal(padding + 24, geometry[0].Center);
-        Assert.Equal(padding + 24 + Size + Spacing, geometry[1].Center);
-        Assert.Equal(padding + 24 + (2 * (Size + Spacing)), geometry[2].Center);
+        Assert.All(geometry, tile => Assert.Equal(1, tile.Scale));
+        for (var index = 0; index < geometry.Length; index++)
+            Assert.Equal(GlassDock.SlotCenter(index, Size, Spacing, Peak), geometry[index].Center, 9);
     }
 
     [Fact]
-    public void 峰值放大时首尾磁贴都不越出画布()
+    public void 放大时邻居让位且间距保持一致()
     {
-        // 缺陷复现：只把总长度算大、磁贴不向内让位时，首枚磁贴的左边缘
-        // 仍是负坐标（默认峰值下 −8.4 DIP），而容器裁切，放大后就被切掉一条边。
-        var count = 4;
-
-        foreach (var pointer in new double?[] { null, 0, GlassDock.SlotCenter(0, Size, Spacing, Peak), 5_000 })
+        var pointers = new double?[]
         {
-            var geometry = GlassDock.Compute(count, Size, Spacing, Peak, pointer);
-            var length = GlassDock.RequiredLength(count, Size, Spacing, Peak);
+            null,
+            GlassDock.SlotCenter(0, Size, Spacing, Peak),
+            GlassDock.SlotCenter(2, Size, Spacing, Peak),
+            (GlassDock.SlotCenter(1, Size, Spacing, Peak) + GlassDock.SlotCenter(2, Size, Spacing, Peak)) / 2,
+            5_000,
+        };
 
-            for (var index = 0; index < count; index++)
+        foreach (var pointer in pointers)
+        {
+            var geometry = GlassDock.Compute(6, Size, Spacing, Peak, pointer);
+            for (var index = 0; index < geometry.Length - 1; index++)
             {
-                var (center, scale) = geometry[index];
-                var half = Size * scale / 2;
-
-                Assert.True(
-                    center - half >= -0.001,
-                    $"指针 {pointer}：第 {index} 枚左边缘 {center - half:F2} 为负，会被裁切");
-
-                Assert.True(
-                    center + half <= length + 0.001,
-                    $"指针 {pointer}：第 {index} 枚右边缘 {center + half:F2} 超出总长 {length:F2}");
+                var rightEdge = geometry[index].Center + Size * geometry[index].Scale / 2;
+                var nextLeftEdge = geometry[index + 1].Center - Size * geometry[index + 1].Scale / 2;
+                Assert.Equal(Spacing, nextLeftEdge - rightEdge, 7);
             }
         }
     }
 
     [Fact]
-    public void 绘制顺序与命中顺序是同一份()
+    public void 每个图标都保持在固定画布边界内()
     {
-        // 重叠归属「视觉即所得」要求绘制 z 序与命中判定顺序一致；
-        // 两者共用 TopToBottomOrder，这条用例锁住的是「共用」本身。
-        var pointer = GlassDock.SlotCenter(2, Size, Spacing, Peak) - 6;
-        var geometry = GlassDock.Compute(5, Size, Spacing, Peak, pointer);
+        var count = 7;
+        var length = GlassDock.RequiredLength(count, Size, Spacing, Peak);
+        var pointers = Enumerable.Range(-20, 421).Select(step => (double?)(step * 5d))
+            .Append(null);
 
+        foreach (var pointer in pointers)
+        {
+            var geometry = GlassDock.Compute(count, Size, Spacing, Peak, pointer);
+            for (var index = 0; index < count; index++)
+            {
+                var half = Size * geometry[index].Scale / 2;
+                Assert.True(geometry[index].Center - half >= -0.001);
+                Assert.True(geometry[index].Center + half <= length + 0.001);
+            }
+        }
+    }
+
+    [Fact]
+    public void 绘制顺序与命中顺序共用同一份几何()
+    {
+        var geometry = GlassDock.Compute(5, Size, Spacing, Peak,
+            GlassDock.SlotCenter(2, Size, Spacing, Peak) - 6);
         var order = GlassDock.TopToBottomOrder(geometry);
 
-        // 顺序 = 缩放降序。
         for (var index = 1; index < order.Length; index++)
+            Assert.True(geometry[order[index - 1]].Scale >= geometry[order[index]].Scale);
+
+        foreach (var index in Enumerable.Range(0, geometry.Length))
         {
-            Assert.True(
-                geometry[order[index - 1]].Scale >= geometry[order[index]].Scale,
-                "z 序不是按缩放降序");
+            var probe = geometry[index].Center;
+            Assert.Equal(index, GlassDock.HitTest(geometry, Size, probe));
         }
-
-        // 命中取的就是这个顺序里的第一个命中者：构造一个被两枚磁贴同时覆盖的点，
-        // 断言命中结果等于「该顺序中第一个覆盖它的索引」。
-        var probe = geometry[2].Center;
-        var expected = order.First(index =>
-        {
-            var (center, scale) = geometry[index];
-            var half = Size * scale / 2;
-            return probe >= center - half && probe < center + half;
-        });
-
-        Assert.Equal(expected, GlassDock.HitTest(geometry, Size, probe));
     }
 
     [Fact]
-    public void 指针正下方的磁贴取峰值_D17()
+    public void 放大峰值和相邻波形连续()
     {
-        var geometry = GlassDock.Compute(5, Size, Spacing, Peak, pointerPosition: GlassDock.SlotCenter(2, Size, Spacing, Peak));
+        var centers = Enumerable.Range(0, 5)
+            .Select(index => GlassDock.SlotCenter(index, Size, Spacing, Peak)).ToArray();
+        var atCenter = GlassDock.Compute(5, Size, Spacing, Peak, centers[2]);
+        Assert.Equal(Peak, atCenter[2].Scale, 9);
+        Assert.Equal(1 + (Peak - 1) * .25, atCenter[1].Scale, 9);
+        Assert.Equal(1 + (Peak - 1) * .25, atCenter[3].Scale, 9);
+        Assert.Equal(1, atCenter[0].Scale, 9);
+        Assert.Equal(1, atCenter[4].Scale, 9);
 
-        Assert.Equal(Peak, geometry[2].Scale, 9);
+        var midpoint = GlassDock.Compute(5, Size, Spacing, Peak, (centers[1] + centers[2]) / 2);
+        Assert.Equal(midpoint[1].Scale, midpoint[2].Scale, 9);
+        Assert.InRange(midpoint[1].Scale, 1.01, Peak - .01);
 
-        // 当前有限范围曲线在一个槽位节距外归1，外围可相等。
-        Assert.Equal(1, geometry[0].Scale);
-        Assert.True(geometry[0].Scale <= geometry[1].Scale);
-        Assert.True(geometry[1].Scale < geometry[2].Scale);
-        Assert.True(geometry[3].Scale < geometry[2].Scale);
-        Assert.True(geometry[4].Scale <= geometry[3].Scale);
-        var midpoint = (GlassDock.SlotCenter(1, Size, Spacing, Peak) + GlassDock.SlotCenter(2, Size, Spacing, Peak)) / 2;
-        var between = GlassDock.Compute(5, Size, Spacing, Peak, midpoint);
-        Assert.Equal(between[1].Scale, between[2].Scale, 9);
-        Assert.InRange(between[1].Scale, 1.01, Peak - .01);
-        Assert.Equal(1, between[0].Scale);
+        var left = GlassDock.Compute(5, Size, Spacing, Peak, centers[2] - 0.01);
+        var right = GlassDock.Compute(5, Size, Spacing, Peak, centers[2] + 0.01);
+        Assert.InRange(Math.Abs(left[2].Scale - right[2].Scale), 0, .001);
     }
 
     [Fact]
-    public void 峰值可调_改为2时中心磁贴翻倍()
+    public void 独立入口可复用同一条距离曲线并在邻居处连续衰减()
     {
-        var geometry = GlassDock.Compute(5, Size, Spacing, 2.0, pointerPosition: GlassDock.SlotCenter(1, Size, Spacing, 2.0));
+        var pitch = Size + Spacing;
+        Assert.Equal(Peak, GlassDock.ScaleAtDistance(0, Size, Spacing, Peak), 9);
+        Assert.Equal(1 + (Peak - 1) * .25, GlassDock.ScaleAtDistance(pitch, Size, Spacing, Peak), 9);
+        Assert.Equal(1, GlassDock.ScaleAtDistance(pitch * 1.5, Size, Spacing, Peak), 9);
 
-        Assert.Equal(2.0, geometry[1].Scale, 9);
+        var before = GlassDock.ScaleAtDistance(pitch * 1.5 - .01, Size, Spacing, Peak);
+        var after = GlassDock.ScaleAtDistance(pitch * 1.5 + .01, Size, Spacing, Peak);
+        Assert.InRange(Math.Abs(before - after), 0, .001);
     }
 
     [Fact]
-    public void 命中落在指针正下方的磁贴上()
+    public void 放大倍率可调()
     {
-        var pointer = GlassDock.SlotCenter(3, Size, Spacing, Peak);
+        var geometry = GlassDock.Compute(5, Size, Spacing, 2.0,
+            GlassDock.SlotCenter(1, Size, Spacing, 2.0));
+        Assert.Equal(2, geometry[1].Scale, 9);
+        Assert.True(geometry[0].Center < geometry[1].Center);
+    }
+
+    [Fact]
+    public void 点击使用当前可见几何且图标间隙不误命中()
+    {
+        var pointer = GlassDock.SlotCenter(2, Size, Spacing, Peak);
         var geometry = GlassDock.Compute(5, Size, Spacing, Peak, pointer);
-
-        Assert.Equal(3, GlassDock.HitTest(geometry, Size, pointer));
-    }
-
-    [Fact]
-    public void 重叠区域归缩放最大的磁贴_视觉即所得()
-    {
-        // 指针位于第 1 枚与第 2 枚槽位之间偏第 2 枚：
-        // 第 2 枚离指针近、放得更大，膨胀后盖过第 1 枚的右缘。
-        var pointer = GlassDock.SlotCenter(2, Size, Spacing, Peak) - 6;
-        var geometry = GlassDock.Compute(5, Size, Spacing, Peak, pointer);
-
-        // 断言此刻确实重叠（第 2 枚的左缘越过了第 1 枚的右缘），
-        // 否则这条用例什么都没锁住。
-        var overlapStart = geometry[2].Center - Size * geometry[2].Scale / 2;
-        var previousEnd = geometry[1].Center + Size * geometry[1].Scale / 2;
-        Assert.True(overlapStart < previousEnd, "用例前提不成立：两枚磁贴没有重叠");
-
         Assert.Equal(2, GlassDock.HitTest(geometry, Size, pointer));
+
+        var gap = geometry[2].Center + Size * geometry[2].Scale / 2 + Spacing / 2;
+        Assert.Equal(-1, GlassDock.HitTest(geometry, Size, gap));
     }
 
     [Fact]
-    public void 命中与绘制用同一帧几何_动画中途也不偏移()
+    public void 总长度为基础宽度加连续波形的放大余量()
     {
-        // 模拟动画中途：指针在两个槽位之间连续取 21 个位置。
-        // 每一帧先算几何再命中——这正是运行时每帧做的事；
-        // 若命中结果跳出「指针两侧最近的两枚磁贴」就说明几何与命中脱节。
-        for (var step = 0; step <= 20; step++)
-        {
-            var pointer = GlassDock.SlotCenter(2, Size, Spacing, Peak)
-                + (GlassDock.SlotCenter(3, Size, Spacing, Peak) - GlassDock.SlotCenter(2, Size, Spacing, Peak)) * step / 20.0;
+        Assert.Equal(160, GlassDock.RequiredLength(3, Size, Spacing, 1));
+        Assert.Equal(160 + Size * (Peak - 1) * 1.5, GlassDock.RequiredLength(3, Size, Spacing, Peak), 9);
 
-            var geometry = GlassDock.Compute(5, Size, Spacing, Peak, pointer);
-            var hit = GlassDock.HitTest(geometry, Size, pointer);
-
-            Assert.True(hit is 2 or 3, $"指针 {pointer:F1} 命中了第 {hit} 枚（期望 2 或 3）");
-        }
-    }
-
-    [Fact]
-    public void 命中落在磁贴间隙时返回无()
-    {
-        // 指针拉到最右端之外：没有任何磁贴接住。
-        var geometry = GlassDock.Compute(3, Size, Spacing, Peak, pointerPosition: null);
-        Assert.Equal(-1, GlassDock.HitTest(geometry, Size, 1000));
-    }
-
-    [Fact]
-    public void 总长度与首尾放大后的边缘严丝合缝()
-    {
-        // 未放大总长：3 枚 = 3*48 + 2*8 = 160。
-        Assert.Equal(160, GlassDock.RequiredLength(3, Size, Spacing, 1.0));
-
-        // 峰值 1.35 时两端各留 (1.35-1)*48/2 = 8.4：总长 = 160 + 16.8。
-        Assert.Equal(160 + 2 * 8.4, GlassDock.RequiredLength(3, Size, Spacing, Peak), 9);
-
-        // 关键性质：某端磁贴放大时，它的外缘恰好落在画布边界上——
-// 总长不是「大致够用」，而是恰好等于该端放大后的边界。
-        // （两端不会同时放大：指针只可能在一处。）
         var length = GlassDock.RequiredLength(3, Size, Spacing, Peak);
+        var resting = GlassDock.Compute(3, Size, Spacing, Peak, null);
+        Assert.Equal(GlassDock.EndPadding(Size, Peak), resting[0].Center - Size / 2, 9);
 
-        var atFirst = GlassDock.Compute(3, Size, Spacing, Peak, GlassDock.SlotCenter(0, Size, Spacing, Peak));
-        Assert.Equal(0, atFirst[0].Center - (Size * atFirst[0].Scale / 2), 6);
+        var atFirst = GlassDock.Compute(3, Size, Spacing, Peak,
+            GlassDock.SlotCenter(0, Size, Spacing, Peak));
+        var firstLeadingPadding = atFirst[0].Center - Size * atFirst[0].Scale / 2;
+        var firstTrailingPadding = length - (atFirst[^1].Center + Size * atFirst[^1].Scale / 2);
+        Assert.Equal(firstLeadingPadding, firstTrailingPadding, 7);
 
-        var atLast = GlassDock.Compute(3, Size, Spacing, Peak, GlassDock.SlotCenter(2, Size, Spacing, Peak));
-        Assert.Equal(length, atLast[2].Center + (Size * atLast[2].Scale / 2), 6);
+        var atLast = GlassDock.Compute(3, Size, Spacing, Peak,
+            GlassDock.SlotCenter(2, Size, Spacing, Peak));
+        var lastLeadingPadding = atLast[0].Center - Size * atLast[0].Scale / 2;
+        var lastTrailingPadding = length - (atLast[^1].Center + Size * atLast[^1].Scale / 2);
+        Assert.Equal(lastLeadingPadding, lastTrailingPadding, 7);
     }
 
     [Fact]
-    public void 厚度预留放大空间_不被窗口裁切()
+    public void 空列表和单图标都有合法几何()
     {
-        // 48 DIP 图标在 1.35 峰值下膨胀到 64.8；上下各留 6 DIP 内边距时
-        // 容器厚度必须 >= 64.8 + 12。
-        var thickness = GlassDock.RequiredThickness(Size, Peak, 6);
+        Assert.Empty(GlassDock.Compute(0, Size, Spacing, Peak, null));
+        var one = GlassDock.Compute(1, Size, Spacing, Peak, GlassDock.SlotCenter(0, Size, Spacing, Peak));
+        Assert.Single(one);
+        Assert.Equal(Peak, one[0].Scale, 9);
+        Assert.Equal(Size + Size * (Peak - 1) * 1.5, GlassDock.RequiredLength(1, Size, Spacing, Peak), 9);
+    }
 
-        Assert.True(thickness >= Size * Peak, "容器厚度没有覆盖峰值放大尺寸——图标会被裁切");
+    [Fact]
+    public void 厚度预留放大空间()
+    {
+        var thickness = GlassDock.RequiredThickness(Size, Peak, 6);
+        Assert.True(thickness >= Size * Peak);
         Assert.Equal(Size * Peak + 12, thickness, 9);
     }
 }

@@ -1,5 +1,7 @@
+using System.IO;
 using System.Windows;
 using GlassDesk.App.Startup;
+using GlassDesk.AppServices;
 using GlassDesk.Core.Storage;
 using GlassDesk.UI.Theming;
 
@@ -130,6 +132,23 @@ public partial class App : Application, IDisposable
             return;
         }
 
+        // Prepare user data before diagnostics or command services can create the destination
+        // directory. Isolated acceptance commands intentionally keep using their private root.
+        var isAcceptanceCommand = options.Verb is AppServiceVerb.Phase3Acceptance
+            or AppServiceVerb.Phase4Acceptance or AppServiceVerb.Phase5Acceptance
+            or AppServiceVerb.Phase6Acceptance;
+        if (!isAcceptanceCommand && !AppPaths.IsPortableDeployment(AppContext.BaseDirectory))
+        {
+            var legacyData = Path.Combine(AppContext.BaseDirectory, "Data");
+            var migration = UserDataMigration.MigrateLegacyData(legacyData, paths.RootDirectory);
+            if (!migration.CanContinue)
+            {
+                Console.Error.WriteLine("LG Dsk 没有覆盖或删除旧数据。请先解决此迁移问题，再运行：" + Environment.NewLine + migration.Error);
+                Shutdown(2);
+                return;
+            }
+        }
+
         if (options.IsAppServiceCommand)
         {
             // 应用库命令完全不需要界面：导入、启动、复查都只碰数据与系统。
@@ -193,6 +212,7 @@ public partial class App : Application, IDisposable
 
             case StartupOutcome.LegacyInstanceBlocked:
             case StartupOutcome.UserDataLeaseUnavailable:
+            case StartupOutcome.UserDataMigrationUnavailable:
             case StartupOutcome.PrimaryDisplayUnavailable:
                 Shutdown(2);
                 break;

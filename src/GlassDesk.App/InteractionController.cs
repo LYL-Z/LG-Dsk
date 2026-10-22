@@ -65,6 +65,7 @@ internal sealed class InteractionController : IDisposable
         if (needsDesktop && !_desktopAvailable) return "当前 Windows 桌面图标状态不可读，已拒绝启用相关动作。";
         var error = _settings.Apply(shortcuts, display, persist);
         if (error is not null) return error;
+        if (_settings.LastWarning is { } warning) _reportError(warning);
         RefreshDisplays();
         return null;
     }
@@ -83,6 +84,7 @@ internal sealed class InteractionController : IDisposable
         InputAction.NextPage or InputAction.PreviousPage => _canNavigatePages,
         InputAction.ToggleDesktopIcons => _desktopAvailable,
         InputAction.ToggleRunningAppSwitcher => true,
+        InputAction.FocusDock => true,
         _ => false,
     };
 

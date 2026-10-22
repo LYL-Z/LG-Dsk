@@ -54,7 +54,7 @@ public class DockSettingsWindowTests
     }
 
     [Fact]
-    public void DockSizeControlsAreRemovedAndLegacyMetricsAreLockedOnTheNextChange()
+    public void DockMetricControlsPersistAndSurviveUnrelatedChanges()
     {
         StaTest.Run(() =>
         {
@@ -63,25 +63,26 @@ public class DockSettingsWindowTests
             {
                 var data = new GlassDeskDataStore(new AppPaths(root));
                 data.LoadAll();
-                data.Settings.Current.Dock.IconSize = 123.4;
-                data.Settings.Current.Dock.MagnificationPeak = 1.333;
+                data.Settings.Current.Dock.IconSize = 56;
+                data.Settings.Current.Dock.IconSpacing = 12;
+                data.Settings.Current.Dock.MagnificationPeak = 1.6;
                 data.Settings.Save();
                 var host = DockSettingsHost.Initialize(Dispatcher.CurrentDispatcher);
                 host.Update(data.Settings.Current.Dock);
                 var window = new SettingsWindow();
                 window.AttachDataStore(data, null);
-                Assert.Null(window.FindName("DockIconSizeSlider"));
-                Assert.Null(window.FindName("DockSpacingSlider"));
-                Assert.Null(window.FindName("DockPeakSlider"));
+                Assert.Equal(56, Assert.IsType<Slider>(window.FindName("DockIconSizeSlider")).Value);
+                Assert.Equal(12, Assert.IsType<Slider>(window.FindName("DockSpacingSlider")).Value);
+                Assert.Equal(1.6, Assert.IsType<Slider>(window.FindName("DockPeakSlider")).Value);
                 Assert.Null(window.FindName("DockCornerSlider"));
                 Assert.IsType<Slider>(window.FindName("DockOffsetXSlider")).Value = 25;
 
                 var reloaded = new SettingsStore(data.Paths.SettingsFile);
                 reloaded.Load();
-                Assert.Equal(DockSettings.FixedIconSize, reloaded.Current.Dock.IconSize);
-                Assert.Equal(DockSettings.FixedIconSpacing, reloaded.Current.Dock.IconSpacing);
-                Assert.Equal(DockSettings.FixedMagnificationPeak, reloaded.Current.Dock.MagnificationPeak);
-                Assert.Equal(DockSettings.FixedIconSize, host.Settings.IconSize);
+                Assert.Equal(56, reloaded.Current.Dock.IconSize);
+                Assert.Equal(12, reloaded.Current.Dock.IconSpacing);
+                Assert.Equal(1.6, reloaded.Current.Dock.MagnificationPeak);
+                Assert.Equal(56, host.Settings.IconSize);
             }
             finally
             {
@@ -91,7 +92,7 @@ public class DockSettingsWindowTests
     }
 
     [Fact]
-    public void DockSizeStaysFixedWhilePlacementAndVisibilitySettingsStillApply()
+    public void DockMetricsVisibilityAndAutoHideSettingsApplyImmediately()
     {
         StaTest.Run(() =>
         {
@@ -107,34 +108,44 @@ public class DockSettingsWindowTests
 
                 var notifications = 0;
                 host.Changed += (_, _) => notifications++;
-                Assert.Null(window.FindName("DockIconSizeSlider"));
-                Assert.Null(window.FindName("DockSpacingSlider"));
-                Assert.Null(window.FindName("DockPeakSlider"));
+                Assert.NotNull(window.FindName("DockIconSizeSlider"));
+                Assert.NotNull(window.FindName("DockSpacingSlider"));
+                Assert.NotNull(window.FindName("DockPeakSlider"));
                 Assert.Null(window.FindName("DockCornerSlider"));
 
+                Assert.IsType<Slider>(window.FindName("DockIconSizeSlider")).Value = 52;
+                Assert.IsType<Slider>(window.FindName("DockSpacingSlider")).Value = 10;
+                Assert.IsType<Slider>(window.FindName("DockPeakSlider")).Value = 1.5;
+                Assert.IsType<CheckBox>(window.FindName("DockAutoHideCheck")).IsChecked = true;
+                Assert.IsType<CheckBox>(window.FindName("ShowRecentApplicationsCheckBox")).IsChecked = false;
                 Assert.IsType<ComboBox>(window.FindName("DockPlacementCombo")).SelectedIndex = 3;
                 Assert.IsType<Slider>(window.FindName("DockOffsetXSlider")).Value = 25;
-                foreach (var removed in new[] { "DockAutoHideCheck", "DockEdgeRevealCheck", "LauncherFullscreenCheck",
+                Assert.True(Assert.IsType<CheckBox>(window.FindName("DockEdgeRevealCheck")).IsChecked);
+                foreach (var removed in new[] { "LauncherFullscreenCheck",
                     "HotCornersEnabledCheck", "HotCornerCombo", "HotCornerDwellBox", "MouseSideButtonsEnabledCheck",
                     "MouseBackActionCombo", "MouseForwardActionCombo" })
                     Assert.Null(window.FindName(removed));
 
-                Assert.Equal(DockSettings.FixedIconSize, data.Settings.Current.Dock.IconSize);
-                Assert.Equal(DockSettings.FixedIconSpacing, data.Settings.Current.Dock.IconSpacing);
-                Assert.Equal(DockSettings.FixedMagnificationPeak, data.Settings.Current.Dock.MagnificationPeak);
-                Assert.Equal(DockSettings.FixedIconSize, host.Settings.IconSize);
+                Assert.Equal(52, data.Settings.Current.Dock.IconSize);
+                Assert.Equal(10, data.Settings.Current.Dock.IconSpacing);
+                Assert.Equal(1.5, data.Settings.Current.Dock.MagnificationPeak);
+                Assert.False(data.Settings.Current.Dock.ShowRecentApplications);
+                Assert.Equal(52, host.Settings.IconSize);
                 Assert.Equal(DockPlacement.TopCenter, host.Settings.Placement);
-                Assert.Equal(DockSettings.FixedMagnificationPeak, host.Settings.MagnificationPeak);
+                Assert.Equal(1.5, host.Settings.MagnificationPeak);
                 Assert.Equal(25, host.Settings.OffsetX);
-                Assert.False(host.Settings.AutoHide);
+                Assert.True(host.Settings.AutoHide);
+                Assert.True(host.Settings.EdgeRevealEnabled);
                 Assert.Equal(40, data.Settings.Current.Appearance.DockCornerRadius);
                 Assert.True(notifications >= 2);
                 var reloaded = new SettingsStore(data.Paths.SettingsFile);
                 reloaded.Load();
-                Assert.Equal(DockSettings.FixedIconSize, reloaded.Current.Dock.IconSize);
-                Assert.Equal(DockSettings.FixedIconSpacing, reloaded.Current.Dock.IconSpacing);
+                Assert.Equal(52, reloaded.Current.Dock.IconSize);
+                Assert.Equal(10, reloaded.Current.Dock.IconSpacing);
                 Assert.Equal(DockPlacement.TopCenter, reloaded.Current.Dock.Placement);
-                Assert.Equal(DockSettings.FixedMagnificationPeak, reloaded.Current.Dock.MagnificationPeak);
+                Assert.Equal(1.5, reloaded.Current.Dock.MagnificationPeak);
+                Assert.True(reloaded.Current.Dock.AutoHide);
+                Assert.True(reloaded.Current.Dock.EdgeRevealEnabled);
                 Assert.Equal(40, reloaded.Current.Appearance.DockCornerRadius);
             }
             finally

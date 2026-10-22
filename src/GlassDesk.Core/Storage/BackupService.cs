@@ -1,3 +1,5 @@
+using System.Security;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using GlassDesk.Core.Models;
@@ -62,9 +64,35 @@ public sealed class BackupService
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationDirectory);
 
+        string? transactionDirectory = null;
+        var cleanupTransactionDirectory = true;
         try
         {
-            Directory.CreateDirectory(destinationDirectory);
+            var destination = Path.GetFullPath(destinationDirectory);
+            if (DataDirectoryGuard.Overlaps(destination, _paths.RootDirectory))
+            {
+                return new TransferResult
+                {
+                    Succeeded = false,
+                    Directory = destination,
+                    Error = "备份位置不能与 LG Dsk 数据目录相同或互相包含。",
+                };
+            }
+
+            EnsureNoReparsePointIfExists(_paths.RootDirectory, "应用数据目录");
+            EnsureNoReparsePointIfExists(_paths.IconCacheDirectory, "应用图标目录");
+            EnsureNoReparsePointsOnPath(destination, "备份目标路径");
+            Directory.CreateDirectory(destination);
+            EnsureNoReparsePointsOnPath(destination, "备份目标路径");
+
+            transactionDirectory = Path.Combine(
+                destination,
+                $".lgdsk-backup-transaction-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(transactionDirectory);
+            EnsureNoReparsePointInPath(destination, transactionDirectory);
+            var stagedFilesDirectory = Path.Combine(transactionDirectory, "new");
+            Directory.CreateDirectory(stagedFilesDirectory);
+            EnsureNoReparsePointInPath(transactionDirectory, stagedFilesDirectory);
 
             var copied = new List<string>();
 
@@ -72,7 +100,7 @@ public sealed class BackupService
             {
                 CopyPreservingRelativePath(
                     Path.Combine(_paths.RootDirectory, relativePath),
-                    destinationDirectory,
+                    stagedFilesDirectory,
                     relativePath);
 
                 copied.Add(relativePath);
@@ -85,18 +113,38 @@ public sealed class BackupService
                 Files = copied,
             };
 
+            var manifestPath = Path.Combine(stagedFilesDirectory, ManifestFileName);
+            EnsureNoReparsePointInPath(stagedFilesDirectory, manifestPath);
             File.WriteAllText(
-                Path.Combine(destinationDirectory, ManifestFileName),
+                manifestPath,
                 JsonSerializer.Serialize(manifest, GlassDeskJsonContext.Default.BackupManifest));
+
+            // 先在目标目录的私有暂存区写完并验证路径，再逐项提交。提交期间如果任一
+            // 文件失败，已替换的旧文件会从同一事务目录回滚，避免留下“半份成功”的备份。
+            CommitStagedFiles(
+                destination,
+                stagedFilesDirectory,
+                transactionDirectory,
+                [.. copied, ManifestFileName]);
 
             return new TransferResult
             {
                 Succeeded = true,
-                Directory = destinationDirectory,
+                Directory = destination,
                 Files = copied,
             };
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (BackupRollbackException ex)
+        {
+            cleanupTransactionDirectory = false;
+            return new TransferResult
+            {
+                Succeeded = false,
+                Directory = destinationDirectory,
+                Error = ex.Message,
+            };
+        }
+        catch (Exception ex) when (IsPathFailure(ex))
         {
             return new TransferResult
             {
@@ -104,6 +152,22 @@ public sealed class BackupService
                 Directory = destinationDirectory,
                 Error = $"备份失败：{ex.Message}",
             };
+        }
+        finally
+        {
+            // 回滚本身失败时必须保留事务目录：其中可能保存着用户原有备份文件。
+            if (cleanupTransactionDirectory && transactionDirectory is not null && Directory.Exists(transactionDirectory))
+            {
+                try
+                {
+                    EnsureNoReparsePointInPath(destinationDirectory, transactionDirectory);
+                    Directory.Delete(transactionDirectory, recursive: true);
+                }
+                catch (Exception ex) when (IsPathFailure(ex))
+                {
+                    // 临时目录清理失败不改变已提交结果；下次备份仍会使用独立的 GUID 目录。
+                }
+            }
         }
     }
 
@@ -128,6 +192,26 @@ public sealed class BackupService
             };
         }
 
+        try
+        {
+            EnsureNoReparsePointIfExists(sourceDirectory, "备份来源目录");
+            EnsureNoReparsePointIfExists(Path.Combine(sourceDirectory, ManifestFileName), "备份清单");
+            EnsureNoReparsePointIfExists(Path.Combine(sourceDirectory, AppPaths.IconCacheSubdirectory), "备份图标目录");
+            _ = CustomIconsInArchive(sourceDirectory);
+            EnsureNoReparsePointIfExists(_paths.RootDirectory, "应用数据目录");
+            EnsureNoReparsePointIfExists(_paths.IconCacheDirectory, "应用图标目录");
+            EnsureNoReparsePointIfExists(_paths.BackupDirectory, "恢复安全副本目录");
+        }
+        catch (Exception ex) when (IsPathFailure(ex))
+        {
+            return new TransferResult
+            {
+                Succeeded = false,
+                Directory = sourceDirectory,
+                Error = $"备份包含符号链接、联接或不可安全访问的路径，未恢复任何文件：{ex.Message}",
+            };
+        }
+
         var manifestPath = Path.Combine(sourceDirectory, ManifestFileName);
         if (!File.Exists(manifestPath))
         {
@@ -146,7 +230,7 @@ public sealed class BackupService
                 File.ReadAllText(manifestPath),
                 GlassDeskJsonContext.Default.BackupManifest);
         }
-        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is JsonException || IsPathFailure(ex))
         {
             return new TransferResult
             {
@@ -181,7 +265,20 @@ public sealed class BackupService
         // 只校验清单是不够的：清单可以完好，而里面的设置文件是坏 JSON。那种情况下逐个
         // 拷贝会用坏数据覆盖用户当前正常的配置，然后还报「恢复成功」——用户既丢了
         // 原数据，又以为一切正常。所以宁可整份拒绝。
-        var unreadable = FindUnreadableDocuments(sourceDirectory);
+        List<string> unreadable;
+        try
+        {
+            unreadable = FindUnreadableDocuments(sourceDirectory);
+        }
+        catch (Exception ex) when (IsPathFailure(ex))
+        {
+            return new TransferResult
+            {
+                Succeeded = false,
+                Directory = sourceDirectory,
+                Error = $"备份中的路径无法安全读取，现有数据未改动：{ex.Message}",
+            };
+        }
         if (unreadable.Count > 0)
         {
             return new TransferResult
@@ -197,6 +294,9 @@ public sealed class BackupService
         try
         {
             _paths.EnsureCreated();
+            EnsureNoReparsePointIfExists(_paths.RootDirectory, "应用数据目录");
+            EnsureNoReparsePointIfExists(_paths.IconCacheDirectory, "应用图标目录");
+            EnsureNoReparsePointIfExists(_paths.BackupDirectory, "恢复安全副本目录");
             var restored = new List<string>();
 
             // 恢复的清单以**归档里有什么**为准，而不是数据目录里现在有什么：
@@ -225,7 +325,7 @@ public sealed class BackupService
                 RepairedIconReferences = repaired,
             };
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (IsPathFailure(ex))
         {
             return new TransferResult
             {
@@ -263,6 +363,7 @@ public sealed class BackupService
             var candidate = Path.Combine(sourceDirectory, relativePath);
 
             // 缺文件不是错误：用户还没自定义过任何东西时拍的备份，本来就会少几份。
+            EnsureNoReparsePointIfExists(candidate, "备份文档");
             if (!File.Exists(candidate))
             {
                 continue;
@@ -283,7 +384,7 @@ public sealed class BackupService
         {
             return canDeserialize(File.ReadAllText(path));
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (IsPathFailure(ex))
         {
             return false;
         }
@@ -315,10 +416,15 @@ public sealed class BackupService
     {
         try
         {
+            EnsureNoReparsePointIfExists(_paths.RootDirectory, "应用数据目录");
+            EnsureNoReparsePointIfExists(_paths.IconCacheDirectory, "应用图标目录");
+            EnsureNoReparsePointIfExists(_paths.BackupDirectory, "恢复安全副本目录");
             var stamp = _timeProvider.GetUtcNow().UtcDateTime
                 .ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
             var directory = Path.Combine(_paths.BackupDirectory, $"pre-restore-{stamp}");
+            EnsureNoReparsePointInPath(_paths.RootDirectory, directory);
             Directory.CreateDirectory(directory);
+            EnsureNoReparsePointInPath(_paths.RootDirectory, directory);
 
             foreach (var relativePath in SourcesToArchive())
             {
@@ -330,7 +436,7 @@ public sealed class BackupService
 
             return directory;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (IsPathFailure(ex))
         {
             // 缺少安全副本不应阻断用户要求的恢复；调用方
             // 只在该路径确实存在时才报告它。
@@ -428,14 +534,20 @@ public sealed class BackupService
     private static IReadOnlyList<string> CustomIconsInArchive(string sourceDirectory)
     {
         var directory = Path.Combine(sourceDirectory, AppPaths.IconCacheSubdirectory);
+        EnsureNoReparsePointIfExists(directory, "备份图标目录");
 
         if (!Directory.Exists(directory))
         {
             return [];
         }
 
-        return [.. Directory.GetFiles(directory, "custom-*")
-            .Select(file => Path.Combine(AppPaths.IconCacheSubdirectory, Path.GetFileName(file)))];
+        var files = Directory.GetFiles(directory, "custom-*");
+        foreach (var file in files)
+        {
+            EnsureNoReparsePointIfExists(file, "备份自定义图标");
+        }
+
+        return [.. files.Select(file => Path.Combine(AppPaths.IconCacheSubdirectory, Path.GetFileName(file)))];
     }
 
     /// <summary>
@@ -447,14 +559,171 @@ public sealed class BackupService
     /// </remarks>
     private static void CopyPreservingRelativePath(string source, string destinationDirectory, string relativePath)
     {
+        EnsureNoReparsePointIfExists(source, "复制来源文件");
+        EnsureNoReparsePointIfExists(destinationDirectory, "复制目标目录");
         var target = Path.Combine(destinationDirectory, relativePath);
         var directory = Path.GetDirectoryName(target);
 
         if (!string.IsNullOrEmpty(directory))
         {
+            EnsureNoReparsePointInPath(destinationDirectory, directory);
             Directory.CreateDirectory(directory);
+            EnsureNoReparsePointInPath(destinationDirectory, directory);
         }
 
+        EnsureNoReparsePointIfExists(target, "复制目标文件");
         File.Copy(source, target, overwrite: true);
     }
+
+    private static void CommitStagedFiles(
+        string destinationDirectory,
+        string stagedFilesDirectory,
+        string transactionDirectory,
+        IReadOnlyList<string> relativePaths)
+    {
+        var rollbackDirectory = Path.Combine(transactionDirectory, "previous");
+        Directory.CreateDirectory(rollbackDirectory);
+        EnsureNoReparsePointInPath(transactionDirectory, rollbackDirectory);
+
+        var committed = new List<BackupCommitRecord>();
+        try
+        {
+            foreach (var relativePath in relativePaths)
+            {
+                var stagedFile = Path.Combine(stagedFilesDirectory, relativePath);
+                var targetFile = Path.Combine(destinationDirectory, relativePath);
+                var previousFile = Path.Combine(rollbackDirectory, relativePath);
+                var targetDirectory = Path.GetDirectoryName(targetFile)!;
+                var previousDirectory = Path.GetDirectoryName(previousFile)!;
+
+                EnsureNoReparsePointInPath(stagedFilesDirectory, stagedFile);
+                EnsureNoReparsePointInPath(destinationDirectory, targetDirectory);
+                if (Directory.Exists(targetFile))
+                    throw new IOException($"备份目标中存在同名目录，未覆盖：{relativePath}");
+                if (!File.Exists(stagedFile))
+                    throw new IOException($"备份暂存文件缺失，无法提交：{relativePath}");
+
+                Directory.CreateDirectory(targetDirectory);
+                EnsureNoReparsePointInPath(destinationDirectory, targetDirectory);
+                Directory.CreateDirectory(previousDirectory);
+                EnsureNoReparsePointInPath(rollbackDirectory, previousDirectory);
+
+                var record = new BackupCommitRecord(targetFile, previousFile);
+                committed.Add(record);
+
+                EnsureNoReparsePointIfExists(targetFile, "备份目标文件");
+                if (File.Exists(targetFile))
+                {
+                    File.Move(targetFile, previousFile);
+                    record.PreviousMoved = true;
+                }
+
+                record.InstalledSha256 = GetSha256(stagedFile);
+                File.Move(stagedFile, targetFile);
+                record.NewFileInstalled = true;
+            }
+        }
+        catch (Exception commitError) when (IsPathFailure(commitError))
+        {
+            try
+            {
+                for (var index = committed.Count - 1; index >= 0; index--)
+                {
+                    var record = committed[index];
+                    EnsureNoReparsePointIfExists(record.TargetFile, "备份回滚目标");
+
+                    if (record.NewFileInstalled && File.Exists(record.TargetFile))
+                    {
+                        if (!string.Equals(GetSha256(record.TargetFile), record.InstalledSha256, StringComparison.Ordinal))
+                            throw new IOException($"回滚时发现备份目标被外部修改，已保留事务数据：{record.TargetFile}");
+                        File.Delete(record.TargetFile);
+                    }
+
+                    if (record.PreviousMoved)
+                    {
+                        if (File.Exists(record.TargetFile))
+                            throw new IOException($"回滚目标已被外部占用，旧备份文件保留在事务目录：{record.PreviousFile}");
+                        EnsureNoReparsePointInPath(destinationDirectory, Path.GetDirectoryName(record.TargetFile)!);
+                        File.Move(record.PreviousFile, record.TargetFile);
+                    }
+                }
+            }
+            catch (Exception rollbackError) when (IsPathFailure(rollbackError))
+            {
+                throw new BackupRollbackException(
+                    $"备份提交失败，且自动回滚未能完整完成。为保护原有文件，恢复副本保留在：{transactionDirectory}。提交错误：{commitError.Message}；回滚错误：{rollbackError.Message}",
+                    new AggregateException(commitError, rollbackError));
+            }
+
+            throw;
+        }
+    }
+
+    private static string GetSha256(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream));
+    }
+
+    private static void EnsureNoReparsePointInPath(string rootDirectory, string path)
+    {
+        var root = Path.GetFullPath(rootDirectory);
+        var fullPath = Path.GetFullPath(path);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var prefix = Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
+        if (!string.Equals(root, fullPath, comparison) && !fullPath.StartsWith(prefix, comparison))
+            throw new IOException("复制目标超出了预期目录。");
+
+        EnsureNoReparsePointIfExists(root, "复制目标根目录");
+        var relative = Path.GetRelativePath(root, fullPath);
+        if (relative == ".") return;
+
+        var current = root;
+        foreach (var segment in relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            EnsureNoReparsePointIfExists(current, "复制目标路径");
+        }
+    }
+
+    private static void EnsureNoReparsePointsOnPath(string path, string description)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath);
+        if (string.IsNullOrEmpty(root))
+            throw new IOException($"无法确认{description}的根路径。");
+
+        EnsureNoReparsePointIfExists(root, description);
+        var current = root;
+        foreach (var segment in fullPath[root.Length..].Split(
+                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            EnsureNoReparsePointIfExists(current, description);
+        }
+    }
+
+    private static void EnsureNoReparsePointIfExists(string path, string description)
+    {
+        if (!File.Exists(path) && !Directory.Exists(path)) return;
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            throw new IOException($"{description}是符号链接、联接或其他重解析点：{path}");
+    }
+
+    private static bool IsPathFailure(Exception exception) => exception is IOException or UnauthorizedAccessException
+        or SecurityException or ArgumentException or NotSupportedException;
+
+    private sealed class BackupCommitRecord(string targetFile, string previousFile)
+    {
+        public string TargetFile { get; } = targetFile;
+        public string PreviousFile { get; } = previousFile;
+        public bool PreviousMoved { get; set; }
+        public bool NewFileInstalled { get; set; }
+        public string? InstalledSha256 { get; set; }
+    }
+
+    private sealed class BackupRollbackException(string message, Exception innerException)
+        : IOException(message, innerException);
 }

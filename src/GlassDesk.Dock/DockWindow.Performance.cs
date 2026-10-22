@@ -76,18 +76,15 @@ public partial class DockWindow
     {
         if (_performanceSleeping) return;
         _autoHide?.ForceHide(DateTime.UtcNow);
-        var target = (double)_fullyHiddenOffsetPixels;
-        if (ThemeService.Current?.AnimationsEnabled == false) _slideOffsetPixels = target;
-        else _slideOffsetPixels += (target - _slideOffsetPixels) * .25;
-        if (Math.Abs(_slideOffsetPixels - target) <= .5) _slideOffsetPixels = target;
-        ApplySlide(_restingRect, _slideOffsetPixels);
+        SetSlideAnimationTarget(_fullyHiddenOffsetPixels, forceImmediate: ThemeService.Current?.AnimationsEnabled == false);
         NotifyPerformanceSurfaceVisibility();
-        if (_slideOffsetPixels == target) FinishPerformanceSleep();
     }
 
     private void FinishPerformanceSleep()
     {
+        StopSlideRendering();
         _slideOffsetPixels = _fullyHiddenOffsetPixels;
+        _slideAnimationTargetPixels = _fullyHiddenOffsetPixels;
         _performanceSleeping = true;
         _frameTimer?.Stop();
         GlassSurface.SetPerformanceSleeping(true);

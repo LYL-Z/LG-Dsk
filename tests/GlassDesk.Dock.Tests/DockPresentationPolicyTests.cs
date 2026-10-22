@@ -6,22 +6,44 @@ namespace GlassDesk.Dock.Tests;
 public sealed class DockPresentationPolicyTests
 {
     [Theory]
-    [InlineData(false, false, false, false, false, DockPresentationMode.DesktopDock)]
-    [InlineData(true, true, false, true, true, DockPresentationMode.DesktopDock)]
-    [InlineData(false, true, false, true, false, DockPresentationMode.Hidden)]
-    [InlineData(false, true, true, true, true, DockPresentationMode.RunningAppSwitcher)]
-    [InlineData(false, true, false, false, true, DockPresentationMode.RunningAppSwitcher)]
-    [InlineData(false, true, false, true, true, DockPresentationMode.RunningAppSwitcher)]
-    public void ChoosesDockSwitcherOrHiddenState(
-        bool launcherActive,
-        bool externalForeground,
-        bool fullscreen,
-        bool hasApps,
-        bool switcherRequested,
+    [InlineData(DockForegroundKind.ExternalApplication, DockTaskbarKind.AutoHidden, DockFullscreenKind.NotExclusive,
+        DockAwarenessRequest.CompactIsland, true, false, false, DockPresentationMode.RunningAppIsland)]
+    [InlineData(DockForegroundKind.ExternalApplication, DockTaskbarKind.Visible, DockFullscreenKind.NotExclusive,
+        DockAwarenessRequest.CompactIsland, true, false, false, DockPresentationMode.DesktopDock)]
+    [InlineData(DockForegroundKind.ExternalApplication, DockTaskbarKind.AutoHidden, DockFullscreenKind.NotExclusive,
+        DockAwarenessRequest.Switcher, true, false, false, DockPresentationMode.RunningAppSwitcher)]
+    [InlineData(DockForegroundKind.ExternalApplication, DockTaskbarKind.AutoHidden, DockFullscreenKind.Exclusive,
+        DockAwarenessRequest.Switcher, true, false, false, DockPresentationMode.RunningAppSwitcher)]
+    [InlineData(DockForegroundKind.ExternalApplication, DockTaskbarKind.AutoHidden, DockFullscreenKind.Exclusive,
+        DockAwarenessRequest.CompactIsland, true, false, false, DockPresentationMode.Hidden)]
+    [InlineData(DockForegroundKind.ExternalApplication, DockTaskbarKind.AutoHidden, DockFullscreenKind.Unknown,
+        DockAwarenessRequest.Switcher, true, false, false, DockPresentationMode.Hidden)]
+    [InlineData(DockForegroundKind.ExternalApplication, DockTaskbarKind.AutoHidden, DockFullscreenKind.Unknown,
+        DockAwarenessRequest.CompactIsland, true, false, false, DockPresentationMode.Hidden)]
+    [InlineData(DockForegroundKind.SecureDesktop, DockTaskbarKind.AutoHidden, DockFullscreenKind.NotExclusive,
+        DockAwarenessRequest.Switcher, true, false, false, DockPresentationMode.Hidden)]
+    [InlineData(DockForegroundKind.Unknown, DockTaskbarKind.AutoHidden, DockFullscreenKind.NotExclusive,
+        DockAwarenessRequest.None, false, false, false, DockPresentationMode.Hidden)]
+    [InlineData(DockForegroundKind.Unknown, DockTaskbarKind.AutoHidden, DockFullscreenKind.NotExclusive,
+        DockAwarenessRequest.None, false, true, false, DockPresentationMode.Hidden)]
+    [InlineData(DockForegroundKind.ShellDesktop, DockTaskbarKind.AutoHidden, DockFullscreenKind.NotExclusive,
+        DockAwarenessRequest.None, false, false, false, DockPresentationMode.DesktopDock)]
+    [InlineData(DockForegroundKind.ExternalApplication, DockTaskbarKind.AutoHidden, DockFullscreenKind.NotExclusive,
+        DockAwarenessRequest.Switcher, false, false, false, DockPresentationMode.DesktopDock)]
+    [InlineData(DockForegroundKind.ExternalApplication, DockTaskbarKind.AutoHidden, DockFullscreenKind.NotExclusive,
+        DockAwarenessRequest.Switcher, true, false, true, DockPresentationMode.Hidden)]
+    public void TypedContextSelectsOnlySafeSurfaces(
+        DockForegroundKind foreground,
+        DockTaskbarKind taskbar,
+        DockFullscreenKind fullscreen,
+        DockAwarenessRequest request,
+        bool hasSwitcherContent,
+        bool launcher,
+        bool settings,
         DockPresentationMode expected)
     {
-        Assert.Equal(expected, DockPresentationPolicy.Resolve(
-            launcherActive, externalForeground, fullscreen, hasApps, switcherRequested));
+        Assert.Equal(expected, DockPresentationPolicy.Resolve(new DockPresentationContext(
+            foreground, taskbar, fullscreen, request, hasSwitcherContent, launcher, settings)));
     }
 
     [Fact]
@@ -42,34 +64,6 @@ public sealed class DockPresentationPolicyTests
         Assert.Equal("editor", items[0].DisplayName);
         Assert.Contains("项目 A", items[0].ToolTipText);
         Assert.DoesNotContain(items, item => item.ProcessId == 99);
-    }
-
-    [Fact]
-    public void AutoHideAppIslandCanBeAdmittedForAnExternalWindowThatIsNotGeometricallyFullscreen()
-    {
-        var mode = DockPresentationPolicy.Resolve(
-            launcherActive: false,
-            externalApplicationForeground: true,
-            foregroundIsFullscreen: false,
-            hasSwitchableApplications: false,
-            switcherRequested: false,
-            appIslandRequested: true);
-
-        Assert.Equal(DockPresentationMode.RunningAppIsland, mode);
-    }
-
-    [Fact]
-    public void ExplicitSwitcherTakesPrecedenceOverCompactAppIsland()
-    {
-        var mode = DockPresentationPolicy.Resolve(
-            launcherActive: false,
-            externalApplicationForeground: true,
-            foregroundIsFullscreen: true,
-            hasSwitchableApplications: false,
-            switcherRequested: true,
-            appIslandRequested: true);
-
-        Assert.Equal(DockPresentationMode.RunningAppSwitcher, mode);
     }
 
     [Fact]

@@ -181,6 +181,15 @@
             <StackPanel>
               <TextBlock x:Name="AppearanceSectionHeading" FontSize="16" FontWeight="SemiBold" Text="外观"
                          Foreground="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+              <TextBlock Margin="0,12,0,4" Text="应用主题" />
+              <ComboBox x:Name="AppearanceThemeCombo" AutomationProperties.Name="应用主题"
+                        SelectionChanged="OnAppearanceControlChanged">
+                <ComboBoxItem Content="跟随 Windows" />
+                <ComboBoxItem Content="暖色浅色" />
+                <ComboBoxItem Content="深色" />
+              </ComboBox>
+              <TextBlock Margin="0,5,0,0" TextWrapping="Wrap"
+                         Text="主题作用于 Dock 和启动台；设置中心始终保留暖纸色 Claude 衍生配色。" />
               <TextBlock Margin="0,12,0,4" Text="玻璃效果" />
               <ComboBox x:Name="AppearanceMaterialCombo" AutomationProperties.Name="玻璃效果"
                         SelectionChanged="OnAppearanceControlChanged">
@@ -213,25 +222,60 @@
               <TextBlock Margin="0,6,0,0" Text="分别调节 Dock 和启动台的玻璃透明度。默认 Dock 90%、启动台 20%。" TextWrapping="Wrap" />
               <CheckBox x:Name="ReduceMotionCheck" Margin="0,10,0,0" Content="减少动画"
                         AutomationProperties.Name="减少动画" Checked="OnAppearanceControlChanged" Unchecked="OnAppearanceControlChanged" />
+              <CheckBox x:Name="ReduceTransparencyCheck" Margin="0,6,0,0" Content="降低透明度，优先保证文字清晰"
+                        AutomationProperties.Name="降低透明度" Checked="OnAppearanceControlChanged" Unchecked="OnAppearanceControlChanged" />
               <TextBlock x:Name="AppearanceStatus" Margin="0,8,0,12" TextWrapping="Wrap" AutomationProperties.Name="外观设置状态" />
               <Separator Margin="0,4,0,14" />
               <TextBlock x:Name="DockSectionHeading" FontSize="16" FontWeight="SemiBold" Text="Dock 设置"
                          Foreground="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
               <TextBlock Margin="0,10,0,4" TextWrapping="Wrap"
-                         Text="整体大小同时调整图标、间距和栏高度。外框长度可单独调节，悬停放大效果保持不变。" />
-              <TextBlock Margin="0,12,0,4" Text="左侧固定图标" />
+                          Text="保留液态玻璃外观；分别调节图标尺寸、间距和悬停放大。最近应用与自动隐藏可独立设置。" />
+              <TextBlock Margin="0,12,0,4" Text="Dock 系统入口" />
               <CheckBox x:Name="ShowLauncherEntryCheckBox" Content="显示启动台" Margin="0,4"
                         AutomationProperties.Name="Dock 显示启动台" Checked="OnDockControlChanged" Unchecked="OnDockControlChanged" />
               <CheckBox x:Name="ShowThisPcEntryCheckBox" Content="显示此电脑" Margin="0,4"
                         AutomationProperties.Name="Dock 显示此电脑" Checked="OnDockControlChanged" Unchecked="OnDockControlChanged" />
-              <CheckBox x:Name="ShowDesktopIconsEntryCheckBox" Content="显示切换桌面图标" Margin="0,4"
-                        AutomationProperties.Name="Dock 显示切换桌面图标" Checked="OnDockControlChanged" Unchecked="OnDockControlChanged" />
-              <TextBlock Margin="0,4,0,10" TextWrapping="Wrap" Text="按启动台、此电脑、切换桌面图标的顺序固定在左侧。切换桌面图标用于显示或隐藏桌面上的图标。" />
+              <TextBlock Margin="0,4,0,10" TextWrapping="Wrap"
+                         Text="左侧固定以 Finder 文件管理器和设置开头；启动台与此电脑可选。下载文件夹和回收站固定在右侧。" />
               <TextBlock Margin="0,12,0,4" Text="整体大小" />
               <Slider x:Name="DockScaleSlider" Minimum="0.6666666666666666" Maximum="1.5"
                       SmallChange="0.05" LargeChange="0.1" IsMoveToPointEnabled="True"
                       AutomationProperties.Name="Dock 整体大小" ValueChanged="OnDockControlChanged" />
               <TextBlock x:Name="DockScaleReadout" Margin="0,2,0,6" FontSize="11" AutomationProperties.Name="Dock 整体大小当前值" />
+              <TextBlock Margin="0,10,0,4" Text="图标尺寸（DIP）" />
+              <Slider x:Name="DockIconSizeSlider" Minimum="32" Maximum="96" TickFrequency="1"
+                      AutomationProperties.Name="Dock 图标尺寸"
+                      ValueChanged="OnDockControlChanged" />
+              <TextBlock x:Name="DockIconSizeReadout" Margin="0,2,0,4" FontSize="11" />
+              <TextBlock Margin="0,8,0,4" Text="图标间距（DIP）" />
+              <Slider x:Name="DockSpacingSlider" Minimum="0" Maximum="24" TickFrequency="1"
+                      AutomationProperties.Name="Dock 图标间距"
+                      ValueChanged="OnDockControlChanged" />
+              <TextBlock x:Name="DockSpacingReadout" Margin="0,2,0,4" FontSize="11" />
+              <TextBlock Margin="0,8,0,4" Text="悬停最大放大倍率" />
+              <Slider x:Name="DockPeakSlider" Minimum="1" Maximum="2" TickFrequency="0.05"
+                      SmallChange="0.05" LargeChange="0.1"
+                      AutomationProperties.Name="Dock 悬停最大放大倍率" ValueChanged="OnDockControlChanged" />
+              <TextBlock x:Name="DockPeakReadout" Margin="0,2,0,4" FontSize="11" />
+              <CheckBox x:Name="ShowRecentApplicationsCheckBox" Content="显示最近使用的未固定应用" Margin="0,8,0,2"
+                        AutomationProperties.Name="Dock 显示最近使用的应用"
+                        Checked="OnDockControlChanged" Unchecked="OnDockControlChanged" />
+              <TextBlock Margin="0,8,0,4" Text="最近应用数量（最多 3 个）" />
+              <Slider x:Name="RecentApplicationsLimitSlider" Minimum="0" Maximum="3" TickFrequency="1"
+                      IsSnapToTickEnabled="True" AutomationProperties.Name="Dock 最近应用数量"
+                      ValueChanged="OnDockControlChanged" />
+              <CheckBox x:Name="DockAutoHideCheck" Content="指针离开后自动隐藏 Dock" Margin="0,8,0,2"
+                        AutomationProperties.Name="Dock 自动隐藏"
+                        Checked="OnDockControlChanged" Unchecked="OnDockControlChanged" />
+              <CheckBox x:Name="DockEdgeRevealCheck" Content="指针到达 Dock 边缘时显示" Margin="0,2,0,2"
+                        AutomationProperties.Name="Dock 边缘唤出"
+                        Checked="OnDockControlChanged" Unchecked="OnDockControlChanged" />
+              <TextBlock Margin="0,8,0,4" Text="自动隐藏延迟（毫秒）" />
+              <Slider x:Name="DockAutoHideDelaySlider" Minimum="0" Maximum="3000" TickFrequency="100"
+                      SmallChange="100" LargeChange="500"
+                      AutomationProperties.Name="Dock 自动隐藏延迟"
+                      ValueChanged="OnDockControlChanged" />
+              <TextBlock x:Name="DockAutoHideDelayReadout" Margin="0,2,0,4" FontSize="11" />
               <TextBlock Margin="0,12,0,4" Text="外框长度（DIP）" />
               <Slider x:Name="DockFrameLengthSlider" Minimum="180" Maximum="180" TickFrequency="8"
                       AutomationProperties.Name="Dock 外框长度（DIP）"
@@ -262,6 +306,32 @@
               <TextBlock x:Name="DockSettingsStatus" Margin="0,10,0,16" TextWrapping="Wrap"
                          Foreground="{Binding SecondaryForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
               <Separator Margin="0,4,0,14" />
+              <TextBlock x:Name="IslandSectionHeading" FontSize="16" FontWeight="SemiBold" Text="应用岛"
+                         Foreground="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+              <TextBlock Margin="0,8,0,8" TextWrapping="Wrap"
+                         Text="应用岛在 Windows 任务栏自动隐藏且其他应用位于前台时提供轻量入口。它汇总可切换窗口、固定应用、已识别的后台进程，以及 Windows 辅助功能树公开的托盘项目。后台进程和托盘项目不一定能直接切换；独占全屏程序可以覆盖普通桌面浮层。" />
+              <CheckBox x:Name="FullscreenAppIslandCheck" Margin="0,2,0,6"
+                        Content="任务栏自动隐藏时显示应用岛"
+                        AutomationProperties.Name="任务栏自动隐藏时显示应用岛"
+                        IsEnabled="False"
+                        Checked="OnPerformanceControlChanged" Unchecked="OnPerformanceControlChanged" />
+              <CheckBox x:Name="ExpandIslandOnHoverCheck" Margin="0,2,0,6"
+                        Content="鼠标移入时展开应用岛"
+                        AutomationProperties.Name="鼠标移入时展开应用岛"
+                        IsEnabled="False"
+                        Checked="OnPerformanceControlChanged" Unchecked="OnPerformanceControlChanged" />
+              <TextBlock Margin="24,0,0,6" TextWrapping="Wrap"
+                         Text="关闭后仍可点击紧凑入口展开，也可使用应用切换快捷键。" />
+              <CheckBox x:Name="ShowTrayIconsCheck" Margin="0,2,0,6"
+                        Content="在切换器中显示可访问的托盘项目"
+                        AutomationProperties.Name="在切换器中显示可访问的托盘项目"
+                        IsEnabled="False"
+                        Checked="OnPerformanceControlChanged" Unchecked="OnPerformanceControlChanged" />
+              <TextBlock Margin="24,0,0,8" TextWrapping="Wrap"
+                         Text="仅枚举 Windows UI Automation 可访问的项目；未公开给辅助功能的托盘图标无法保证读取或操作。" />
+              <TextBlock x:Name="IslandSettingsStatus" Margin="0,8,0,14" TextWrapping="Wrap"
+                         AutomationProperties.Name="应用岛设置状态" />
+              <Separator Margin="0,4,0,14" />
               <TextBlock x:Name="LauncherSectionHeading" FontSize="16" FontWeight="SemiBold" Text="启动台设置"
                          Foreground="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
               <TextBlock Margin="0,12,0,4" Text="行数（2–10）" />
@@ -284,28 +354,24 @@
               <TextBlock x:Name="ShortcutsSectionHeading" FontSize="16" FontWeight="SemiBold" Text="快捷操作"
                          Foreground="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
               <TextBlock Margin="0,6,0,10" TextWrapping="Wrap" Text="点击当前快捷键即可录制键盘组合、标点键、鼠标侧键或滚轮方向，录制后自动保存。Esc 取消，Backspace / Delete 清除绑定。" />
-              <TextBlock Margin="0,0,0,8" TextWrapping="Wrap" Text="Dock 在应用前台时不会因鼠标经过而弹出。按下切换快捷键可呼出液态玻璃应用条，切换已检测到的窗口；再按一次快捷键可收起。启用应用岛后，只要 Windows 任务栏自动隐藏且其他应用位于前台，屏幕上沿就会显示紧凑入口，鼠标移入即可展开。部分独占全屏程序可能盖住桌面浮层，此时可用 Windows 的 Alt+Tab 切换。" />
+              <TextBlock Margin="0,0,0,8" TextWrapping="Wrap" Text="Dock 在应用前台时不会因鼠标经过而弹出。按下切换快捷键可呼出液态玻璃应用条，切换已检测到的窗口；再按一次快捷键可收起。启用应用岛后，只要 Windows 任务栏自动隐藏且其他应用位于前台，屏幕上沿就会显示紧凑入口，鼠标移入即可展开。可为“键盘聚焦 Dock”录制快捷键；进入后用左右方向键移动、Enter 打开、Esc 返回。该快捷键默认关闭，避免占用已有组合键。部分独占全屏程序可能盖住桌面浮层，此时可用 Windows 的 Alt+Tab 切换。" />
               <UniformGrid Columns="2">
                 <TextBlock Margin="0,7" Text="打开/关闭启动台" /><settings:ShortcutRecorder x:Name="ToggleLauncherHotkeyBox" AutomationProperties.Name="打开/关闭启动台快捷键"  RecordingCompleted="OnShortcutRecordingCompleted" />
                 <TextBlock Margin="0,7" Text="下一页" /><settings:ShortcutRecorder x:Name="NextPageHotkeyBox" AutomationProperties.Name="下一页快捷键"  RecordingCompleted="OnShortcutRecordingCompleted" />
                 <TextBlock Margin="0,7" Text="上一页" /><settings:ShortcutRecorder x:Name="PreviousPageHotkeyBox" AutomationProperties.Name="上一页快捷键"  RecordingCompleted="OnShortcutRecordingCompleted" />
                 <TextBlock Margin="0,7" Text="切换桌面图标" /><settings:ShortcutRecorder x:Name="ToggleDesktopIconsHotkeyBox" AutomationProperties.Name="切换桌面图标快捷键"  RecordingCompleted="OnShortcutRecordingCompleted" />
                 <TextBlock Margin="0,7" Text="显示/隐藏运行应用切换条" /><settings:ShortcutRecorder x:Name="ToggleRunningAppSwitcherHotkeyBox" AutomationProperties.Name="显示或隐藏运行应用切换条快捷键" RecordingCompleted="OnShortcutRecordingCompleted" />
+                <TextBlock Margin="0,7" Text="键盘聚焦 Dock" /><settings:ShortcutRecorder x:Name="FocusDockHotkeyBox" AutomationProperties.Name="键盘聚焦 Dock 快捷键" RecordingCompleted="OnShortcutRecordingCompleted" />
               </UniformGrid>
               <TextBlock x:Name="InteractionSettingsStatus" Margin="0,8,0,14" TextWrapping="Wrap"
                          AutomationProperties.Name="快捷操作设置状态" />
               <Separator Margin="0,4,0,14" />
-              <TextBlock x:Name="PerformanceSectionHeading" FontSize="16" FontWeight="SemiBold" Text="性能"
+              <TextBlock x:Name="PerformanceSectionHeading" FontSize="16" FontWeight="SemiBold" Text="性能与兼容"
                          Foreground="{Binding ForegroundBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
               <CheckBox x:Name="AutoSuspendWhenFullscreenCheck" Margin="0,10,0,8" Content="全屏应用运行时自动休眠"
                         AutomationProperties.Name="全屏应用运行时自动休眠" IsEnabled="False"
                         Checked="OnPerformanceControlChanged" Unchecked="OnPerformanceControlChanged" />
-              <TextBlock TextWrapping="Wrap" Text="全屏应用时收起 Dock 并暂停高频背景处理。任务栏自动隐藏时，应用岛显示 Dock 固定项、已打开窗口、应用库中匹配到的后台进程，以及 Windows 可访问性树公开的托盘图标；鼠标经过岛即可展开并切换窗口或打开固定应用。托盘图标清单受 Windows 辅助功能树限制，未公开给辅助功能的隐藏图标无法保证读取。独占全屏程序可以覆盖普通桌面浮层。" />
-              <CheckBox x:Name="FullscreenAppIslandCheck" Margin="0,0,0,8"
-                        Content="任务栏自动隐藏时显示应用岛"
-                        AutomationProperties.Name="任务栏自动隐藏时显示应用岛"
-                        IsEnabled="False"
-                        Checked="OnPerformanceControlChanged" Unchecked="OnPerformanceControlChanged" />
+              <TextBlock TextWrapping="Wrap" Text="全屏应用运行时暂停非必要的后台扫描与动画。Windows 独占全屏和受保护桌面始终由系统控制，LG Dsk 不尝试强制覆盖。" />
               <TextBlock x:Name="PerformanceSettingsStatus" Margin="0,8,0,14" TextWrapping="Wrap"
                          AutomationProperties.Name="性能设置状态" />
               <Separator Margin="0,4,0,14" />
@@ -347,7 +413,8 @@
                         AutomationProperties.Name="自动检查 LG Dsk 正式版本"
                         Checked="OnAutomaticUpdateCheckChanged" Unchecked="OnAutomaticUpdateCheckChanged" />
               <TextBlock x:Name="UpdateStatusText" Margin="0,6,0,12" TextWrapping="Wrap"
-                         AutomationProperties.Name="LG Dsk 更新状态" Text="本地定制版未连接在线更新源，请使用本地仓库构建更新。" />
+                         AutomationProperties.Name="LG Dsk 更新状态"
+                         Text="更新检查优先使用签名的静态正式版目录，并可回退到 GitHub；下载与安装前会征求确认。" />
               <CheckBox
                   x:Name="AutostartCheck"
                   Margin="0,12,0,0"

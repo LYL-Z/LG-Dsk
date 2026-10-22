@@ -312,7 +312,11 @@ public static class WindowLocator
         return (extendedStyle & WsExToolWindow) == 0;
     }
 
-    private static string? TryReadImagePath(uint processId)
+    /// <summary>
+    /// Reads a process image path with <c>PROCESS_QUERY_LIMITED_INFORMATION</c>.
+    /// Returns null if the process exited or Windows denied access.
+    /// </summary>
+    public static string? TryReadImagePath(uint processId)
     {
         var handle = Kernel32.OpenProcess(Kernel32.ProcessQueryLimitedInformation, false, processId);
         if (handle == 0)

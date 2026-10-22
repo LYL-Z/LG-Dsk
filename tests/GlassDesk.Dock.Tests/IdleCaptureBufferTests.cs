@@ -31,7 +31,7 @@ public sealed class IdleCaptureBufferTests
             CompatibilityProbePath.File("GlassCaptureProbe.exe")), TimeSpan.FromSeconds(1)) { TraceObserved = traces.Enqueue, CaptureStarting = carriers.Enqueue };
         var region = new PixelRect(50, 50, 320, 240);
         var baselineFamily=CaptureProcessFamily.Snapshot();
-        using(var initial=Read(feed, region)) { }
+        using(var initial=Read(feed, region, traces)) { }
         var firstFamily=CaptureProcessFamily.KnownProcesses.Except(baselineFamily).ToArray();
         feed.Suspend();
         Thread.Sleep(200);
@@ -49,13 +49,42 @@ public sealed class IdleCaptureBufferTests
         }
         Assert.Single(traces, trace => trace.Stage == "CaptureBuffers" && trace.Reason == "Released");
         Assert.All(firstFamily,pid=>Assert.DoesNotContain(pid,CaptureProcessFamily.KnownProcesses));
-        using var fresh = Read(feed, region);
+        using var fresh = Read(feed, region, traces);
         Assert.Equal(160 * 120 * 4, fresh.Pixels.Length);
         Assert.DoesNotContain(CaptureProcessFamily.KnownProcesses.Except([Environment.ProcessId]),pid=>firstFamily.Contains(pid));
         Assert.Single(traces,trace=>trace.Stage=="CaptureOwner" && trace.Reason=="Retired");
     }
 
-    private static BackdropFrame Read(SharedBackdropFeed feed, PixelRect region)
+    [Fact]
+    public void LongHideRetiresAndRecreatesTheCaptureWorkerWithoutNativeDesktopCapture()
+    {
+        var traces = new ConcurrentQueue<CaptureTrace>();
+        var captures = new ConcurrentQueue<IdleCapture>();
+        using var feed = new SharedBackdropFeed((bounds, _, _) =>
+        {
+            var capture = new IdleCapture(bounds);
+            captures.Enqueue(capture);
+            return capture;
+        }, TimeSpan.FromMilliseconds(120)) { TraceObserved = traces.Enqueue };
+        var region = new PixelRect(50, 50, 320, 240);
+
+        using (Read(feed, region)) { }
+        feed.Suspend();
+
+        Assert.True(SpinWait.SpinUntil(
+            () => traces.Any(trace => trace.Stage == "CaptureOwner" && trace.Reason == "Retired"),
+            TimeSpan.FromSeconds(2)));
+        Assert.Single(captures);
+        Assert.True(captures.Single().Disposed);
+
+        using var fresh = Read(feed, region);
+
+        Assert.Equal(2, captures.Count);
+        Assert.Equal(160 * 120 * 4, fresh.Pixels.Length);
+    }
+
+    private static BackdropFrame Read(SharedBackdropFeed feed, PixelRect region,
+        ConcurrentQueue<CaptureTrace>? traces = null)
     {
         var wait = Stopwatch.StartNew();
         while (wait.Elapsed < TimeSpan.FromSeconds(4))
@@ -63,7 +92,17 @@ public sealed class IdleCaptureBufferTests
             if (feed.TryRead(region, 160, 120, out var frame) && frame is not null) return frame;
             Thread.Sleep(10);
         }
-        throw new TimeoutException("Compatible native capture did not resume: " + feed.Failure);
+        var timeline = traces is null
+            ? "(no native trace requested)"
+            : string.Join(" | ", traces
+                .Where(trace => trace.Stage is "Consumer" or "CaptureOwner" or "CaptureBuffers"
+                    or "Recovery" or "BackdropProvider" or "CaptureFault" or "SourceClock")
+                .TakeLast(48)
+                .Select(trace =>
+                    $"{Stopwatch.GetElapsedTime(trace.AtTicks).TotalMilliseconds:0}ms ago {trace.Stage}:{trace.Reason}"));
+        var performance = System.Text.Json.JsonSerializer.Serialize(feed.InspectPerformance());
+        throw new TimeoutException($"Compatible native capture did not resume. failure={feed.Failure ?? "(none)"}; " +
+            $"performance={performance}; trace={timeline}");
     }
 
     private sealed class IdleCapture(ScreenRect bounds) : IDesktopSceneCapture

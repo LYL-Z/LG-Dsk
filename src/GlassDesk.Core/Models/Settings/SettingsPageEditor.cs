@@ -33,10 +33,17 @@ public static class SettingsPageEditor
                 copy.Dock = new() { TargetDisplayId = settings.Dock.TargetDisplayId };
                 copy.Appearance.DockCornerRadius = 40;
                 break;
+            case "应用岛":
+                copy.Performance = new()
+                {
+                    AutoSuspendWhenFullscreen = settings.Performance.AutoSuspendWhenFullscreen,
+                };
+                break;
             case "启动台": copy.Launcher = new(); break;
             case "快捷操作": copy.Shortcuts = new(); break;
             case "显示器": copy.Display = new(); copy.Dock.TargetDisplayId = null; break;
-            case "性能": copy.Performance = new(); break;
+            case "性能":
+            case "性能与兼容": copy.Performance = new(); break;
             case "桌面与任务栏": copy.DesktopTaskbar = new(); break;
             default: throw new ArgumentException("此页面没有可重置的配置。", nameof(pageName));
         }
@@ -50,6 +57,7 @@ public static class SettingsPageEditor
         if ((dock.FrameLengthDip != 0 && !Range(dock.FrameLengthDip, 64, DockSettings.MaximumFrameLengthDip))
             || !Range(dock.SizeScale, DockSettings.MinimumSizeScale, DockSettings.MaximumSizeScale)
             || !Range(dock.IconSize, 32, 96) || !Range(dock.IconSpacing, 0, 24) || !Range(dock.MagnificationPeak, 1, 2)
+            || !Range(dock.RecentApplicationsLimit, 0, 3)
             || !Range(dock.OffsetX, -200, 200) || !Range(dock.OffsetY, -200, 200)
             || !Range(dock.AutoHideLeaveDelayMs, 0, 3000) || !Range(dock.EdgeHotzoneSize, 1, 64)
             || !Enum.IsDefined(dock.Placement)) return "Dock 数值超出允许范围。";

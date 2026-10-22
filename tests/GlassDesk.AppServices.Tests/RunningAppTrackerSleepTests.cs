@@ -5,6 +5,26 @@ namespace GlassDesk.AppServices.Tests;
 public sealed class RunningAppTrackerSleepTests
 {
     [Fact]
+    public void RunningIdProjectionSkipsMalformedNullLibraryRows()
+    {
+        using var temp = new TempWorkspace();
+        var store = temp.CreateStore();
+        store.LoadAll();
+        var entry = new GlassDesk.Core.Models.AppEntry
+        {
+            Id = "valid-app",
+            Kind = GlassDesk.Core.Models.AppItemKind.Program,
+            Target = @"C:\Apps\Example.exe",
+        };
+
+        using var tracker = new RunningAppTracker(store.Library);
+
+        var running = tracker.FindRunningIds([null!, entry]);
+
+        Assert.Empty(running);
+    }
+
+    [Fact]
     public void SuspendedWindowEventsMarkDirtyWithoutEnumeratingAndResumeReconcilesOnce()
     {
         using var temp = new TempWorkspace();

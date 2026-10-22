@@ -29,9 +29,11 @@ public sealed class GlassPalette
         byte acrylicTintAlpha,
         Color panelBorder,
         Color foreground,
-        Color secondaryForeground)
+        Color secondaryForeground,
+        bool isHighContrast = false)
     {
         IsDark = isDark;
+        IsHighContrast = isHighContrast;
         Accent = accent;
         AcrylicOverlayBackground = acrylicOverlay;
         FallbackPanelBackground = fallbackPanel;
@@ -43,6 +45,8 @@ public sealed class GlassPalette
     }
 
     public bool IsDark { get; }
+
+    public bool IsHighContrast { get; }
 
     public Color Accent { get; }
 
@@ -144,6 +148,27 @@ public sealed class GlassPalette
         foreground: Color.FromRgb(0x32, 0x2B, 0x27),
         secondaryForeground: Color.FromRgb(0x78, 0x6D, 0x62));
 
+    /// <summary>Uses the active Windows high-contrast system colors without translucency.</summary>
+    public static GlassPalette CreateHighContrast()
+    {
+        var background = SystemColors.WindowColor;
+        var foreground = SystemColors.WindowTextColor;
+        var accent = SystemColors.HighlightColor;
+        var secondary = SystemColors.GrayTextColor;
+        var isDark = background.R * .2126 + background.G * .7152 + background.B * .0722 < 128;
+        return new GlassPalette(
+            isDark,
+            accent,
+            Color.FromArgb(0, background.R, background.G, background.B),
+            background,
+            background,
+            255,
+            foreground,
+            foreground,
+            secondary == Colors.Transparent ? foreground : secondary,
+            isHighContrast: true);
+    }
+
     /// <summary>
     /// 解析 <c>#RRGGBB</c> 或 <c>#AARRGGBB</c>，失败时回退到默认强调色，
     /// 免得手工改坏的设置让界面完全没有颜色可用。
@@ -182,8 +207,15 @@ public sealed class GlassPalette
         return brush;
     }
 
-    private LinearGradientBrush CreatePanelBrush(bool acrylicApplied)
+    private Brush CreatePanelBrush(bool acrylicApplied)
     {
+        if (IsHighContrast)
+        {
+            var solid = new SolidColorBrush(FallbackPanelBackground);
+            solid.Freeze();
+            return solid;
+        }
+
         var brush = new LinearGradientBrush
         {
             StartPoint = new Point(0, 0),
@@ -213,8 +245,15 @@ public sealed class GlassPalette
         return brush;
     }
 
-    private LinearGradientBrush CreateBorderBrush()
+    private Brush CreateBorderBrush()
     {
+        if (IsHighContrast)
+        {
+            var solid = new SolidColorBrush(PanelBorder);
+            solid.Freeze();
+            return solid;
+        }
+
         var brush = new LinearGradientBrush
         {
             StartPoint = new Point(0, 0),
